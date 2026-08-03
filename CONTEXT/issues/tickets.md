@@ -1,6 +1,7 @@
-# Local content studio tracker
+# Content studio tracker
 
-No GitHub Project is used for this workspace.
+GitHub Project `VrajGupta/X-Agent` #11 is the canonical workflow state. Its live
+`Grader Ready` option is used for the documented `Grading Ready` handoff.
 
 ## C1 — profile-aware content packs
 
@@ -50,7 +51,7 @@ No GitHub Project is used for this workspace.
 
 ## C5 — fix copy/quote behavior
 
-**Status:** Debugger Ready
+**Status:** Done (part4 PASS)
 
 **Acceptance:**
 - Each post has two copy buttons: "copy post" (copies real X text + URL) and "copy AI variant" (copies AI-generated variant)
@@ -62,7 +63,7 @@ No GitHub Project is used for this workspace.
 
 ## C6 — add X timeline feed to dashboard
 
-**Status:** Debugger Ready
+**Status:** Done (part4 PASS)
 
 **Blocked by:** (none — uses existing X read auth)
 
@@ -80,7 +81,7 @@ No GitHub Project is used for this workspace.
 
 ## C7 — fix AI generation quality with timeline context
 
-**Status:** Debugger Ready
+**Status:** Done (part4 PASS)
 
 **Blocked by:** C6 (done)
 
@@ -98,7 +99,7 @@ No GitHub Project is used for this workspace.
 
 ## C8 — add paste X post URL feature
 
-**Status:** Debugger Ready
+**Status:** Done (part4 PASS)
 
 **Blocked by:** (none — uses existing X read auth)
 

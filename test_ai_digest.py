@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from datetime import datetime, timedelta, timezone
 
-from ai_digest import Item, clean_text, clip_post, collect, fallback_pack, fetch_x_post_by_url, fetch_x_timeline, item_signature, make_content_pack, pack_is_valid, parse_alpha_signal, parse_x_post_url, parse_x_response, render_dashboard, render_paste_section, render_x_timeline_section, render_rss, to_post_text, variant_for, x_weighted_length
+from ai_digest import Item, clean_text, clip_post, collect, fallback_pack, fetch_x_post_by_url, fetch_x_timeline, item_signature, main, make_content_pack, pack_is_valid, parse_alpha_signal, parse_x_post_url, parse_x_response, render_dashboard, render_paste_section, render_x_timeline_section, render_rss, to_post_text, variant_for, x_weighted_length
 from x_auth import pkce_values, refresh_user_token, upsert_env, validate_redirect_uri
 
 
@@ -167,12 +167,21 @@ class DigestTests(unittest.TestCase):
         self.assertIn("custom digest", dashboard)
         self.assertNotIn("javascript:", dashboard)
 
-    def test_profile_opinion_changes_fallback_pack(self):
-        profile = {"projects": [{"name": "my project"}], "opinions": ["measure task cost first"]}
-        item = Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
-        pack = fallback_pack(item, profile)
-        self.assertIn("measure task cost first", pack["variants"][1]["text"])
-        self.assertIn("my project", pack["variants"][1]["text"])
+    def test_fallback_pack_is_simple_and_source_grounded(self):
+        profile = {"projects": [{"name": "template project"}], "opinions": ["generic profile opinion"]}
+        item = Item("x:1", "X", "title", "source summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
+        variants = {variant["kind"]: variant["text"] for variant in fallback_pack(item, profile)["variants"]}
+        self.assertEqual(variants["post"], clip_post("title\n\nsource summary", item.url))
+        self.assertEqual(variants["opinion"], "source summary")
+        self.assertEqual(variants["reply"], "source summary")
+        self.assertEqual(variants["repost"], clip_post("source summary", item.url))
+        self.assertNotIn("generic profile opinion", "".join(variants.values()))
+        self.assertNotIn("template project", "".join(variants.values()))
+
+    def test_fallback_pack_does_not_duplicate_identical_title_and_summary(self):
+        item = Item("x:1", "X", "same source text", "same source text", "https://x.com/a", "2026-08-01T14:38:57+00:00")
+        post = fallback_pack(item, {})["variants"][0]["text"]
+        self.assertEqual(post, clip_post("same source text", item.url))
 
     def test_x_metrics_and_media_are_preserved(self):
         payload = b'''{"data":[{"id":"1","text":"new model 20% faster","author_id":"u","created_at":"2026-08-01T14:38:57Z","public_metrics":{"like_count":4},"attachments":{"media_keys":["m"]}}],"includes":{"users":[{"id":"u","username":"vraj"}],"media":[{"media_key":"m","type":"photo","url":"https://img.example/a.png"}]}}'''
@@ -218,8 +227,8 @@ class DigestTests(unittest.TestCase):
     def test_fetch_x_timeline_resolves_me_then_timeline(self):
         calls = []
 
-        def fake_request_bytes(url, headers=None, method="GET", body=None):
-            calls.append((url, headers))
+        def fake_request_bytes(url, headers=None, method="GET", body=None, timeout=None):
+            calls.append((url, headers, timeout))
             return TIMELINE_ME if "/users/me" in url else TIMELINE_PAYLOAD
 
         with patch("ai_digest.request_bytes", side_effect=fake_request_bytes):
@@ -229,14 +238,34 @@ class DigestTests(unittest.TestCase):
         self.assertIn("/users/me", me_url)
         self.assertIn("/users/42/timelines/reverse_chronological", timeline_url)
         self.assertIn("max_results=20", timeline_url)
-        for _, headers in calls:
+        for _, headers, timeout in calls:
             self.assertEqual(headers["Authorization"], "Bearer secret-token")
+            self.assertEqual(timeout, 2)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].id, "x:t1")
         self.assertEqual(items[0].metrics["like_count"], 7)
 
+    def test_fetch_x_timeline_rejects_garbage_and_deduplicates_posts(self):
+        for payload in (b"{}", b'{"meta":[]}', b'{"data":{}}', b'{"data":[{}]}'):
+            with self.subTest(payload=payload), patch("ai_digest.request_bytes", side_effect=[TIMELINE_ME, payload]):
+                with self.assertRaises(RuntimeError):
+                    fetch_x_timeline("token")
+
+        duplicate_payload = json.loads(TIMELINE_PAYLOAD)
+        duplicate_payload["data"].append(duplicate_payload["data"][0])
+        with patch("ai_digest.request_bytes", side_effect=[TIMELINE_ME, json.dumps(duplicate_payload).encode()]):
+            items = fetch_x_timeline("token")
+        self.assertEqual([item.id for item in items], ["x:t1"])
+
     def test_render_x_timeline_section_shows_unavailable_when_none(self):
         self.assertIn("timeline unavailable", render_x_timeline_section(None))
+
+    def test_render_x_timeline_section_escapes_and_defaults_metrics(self):
+        item = Item("x:1", "X", "title", "<script>alert(1)</script>", "https://x.com/i/status/1", "bad", author="@user")
+        dashboard = render_x_timeline_section([item])
+        self.assertNotIn("<script>", dashboard)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", dashboard)
+        self.assertIn("0 likes · 0 reposts", dashboard)
 
     def test_dashboard_renders_timeline_section_before_cards(self):
         item = Item(
@@ -250,10 +279,12 @@ class DigestTests(unittest.TestCase):
             metrics={"like_count": 7, "retweet_count": 3},
         )
         card = Item("alpha:1", "AlphaSignal", "card title", "card summary", "https://example.com/1", "2026-08-01T14:38:57+00:00")
-        dashboard = render_dashboard([card], x_timeline_items=[item])
+        dashboard = render_dashboard([card, item], x_timeline_items=[item])
         self.assertIn("@vraj", dashboard)
         self.assertIn("agents getting faster every week", dashboard)
-        self.assertIn("data-timeline-id", dashboard)
+        self.assertIn('data-timeline-id="x:t1"', dashboard)
+        self.assertIn('data-item-id="x:t1"', dashboard)
+        self.assertIn("item.dataset.itemId === post.dataset.timelineId", dashboard)
         self.assertIn("7 likes", dashboard)
         self.assertIn("1h", dashboard)
         self.assertLess(dashboard.find('class="timeline"'), dashboard.find('id="cards"'))
@@ -273,22 +304,36 @@ class DigestTests(unittest.TestCase):
             self.assertIn("Agents &amp; tools", dashboard)
             self.assertNotIn("secret-token", dashboard)
 
-    def test_collect_passes_timeline_items_to_dashboard(self):
+    def test_collect_passes_timeline_items_to_dashboard_and_generation_queue(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config = {"alpha_signal_feed": "https://example.com/feed.xml", "x_queries": [], "output_file": str(root / "feed.xml"), "dashboard_file": str(root / "index.html"), "state_file": str(root / "state.json"), "profile_file": str(root / "profile.json"), "max_new_items_per_run": 10, "max_feed_items": 50}
+            config = {"alpha_signal_feed": "https://example.com/feed.xml", "x_queries": [], "output_file": str(root / "feed.xml"), "dashboard_file": str(root / "index.html"), "state_file": str(root / "state.json"), "profile_file": str(root / "profile.json"), "max_new_items_per_run": 0, "max_feed_items": 50}
 
-            def fake_request_bytes(url, headers=None, method="GET", body=None):
+            def fake_request_bytes(url, headers=None, method="GET", body=None, timeout=None):
                 if "/users/me" in url or "reverse_chronological" in url:
                     return TIMELINE_ME if "/users/me" in url else TIMELINE_PAYLOAD
                 return FEED
 
             with patch("ai_digest.request_bytes", side_effect=fake_request_bytes), patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "secret-token"}, clear=True):
-                collect(config)
+                _, state = collect(config)
             dashboard = (root / "index.html").read_text()
             self.assertIn("agents getting faster", dashboard)
             self.assertIn("timeline-post", dashboard)
+            self.assertIn("x:t1", {item["id"] for item in state["pending_items"]})
             self.assertNotIn("secret-token", dashboard)
+
+    def test_cached_timeline_content_survives_timeline_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {"alpha_signal_feed": "https://example.com/feed.xml", "x_queries": [], "output_file": str(root / "feed.xml"), "dashboard_file": str(root / "index.html"), "state_file": str(root / "state.json"), "profile_file": str(root / "profile.json"), "max_new_items_per_run": 10, "max_feed_items": 50}
+            with patch("ai_digest.request_bytes", side_effect=[FEED, TIMELINE_ME, TIMELINE_PAYLOAD]), patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "token"}, clear=True):
+                collect(config)
+            with patch("ai_digest.request_bytes", side_effect=[FEED, RuntimeError("rate limited")]), patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "token"}, clear=True):
+                _, state = collect(config)
+            dashboard = (root / "index.html").read_text()
+            self.assertIn("x:t1", {item["id"] for item in state["items"]})
+            self.assertIn("timeline unavailable", dashboard)
+            self.assertIn("Agents &amp; tools", dashboard)
 
     def test_upsert_env_replaces_values_and_locks_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -298,95 +343,166 @@ class DigestTests(unittest.TestCase):
             self.assertEqual(path.read_text(), "KEEP=yes\nX_USER_ACCESS_TOKEN=new\n")
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
-    def test_copy_post_button_contains_description_and_url(self):
+    def test_copy_post_button_contains_exact_x_text_and_url(self):
         item = Item(
             id="x:1",
             source="X",
             title="a useful update",
-            description="plain summary of the result",
-            url="https://x.com/example/status/1",
+            description='real <X> text & "quotes" — 你好 😀',
+            url="https://x.com/example/status/1?a=1&b=2",
             published_at="2026-08-01T14:38:57+00:00",
         )
         dashboard = render_dashboard([item])
-        self.assertIn("copy post", dashboard)
-        self.assertIn("copy AI variant", dashboard)
-        expected = "plain summary of the result\n\nhttps://x.com/example/status/1"
-        self.assertIn(html.escape(expected, quote=True), dashboard)
+        expected = html.escape(f"{item.description}\n\n{item.url}", quote=True)
+        self.assertIn(f'data-copy="{expected}" onclick="copyPost(this)">copy post</button>', dashboard)
+        self.assertNotIn('real <X> text', dashboard)
 
-    def test_ai_variant_button_copies_variant_not_description(self):
-        item = Item(
-            id="x:1",
-            source="X",
-            title="a useful update",
-            description="real post text",
-            url="https://x.com/example/status/1",
-            published_at="2026-08-01T14:38:57+00:00",
-        )
+    def test_copy_post_with_empty_text_copies_only_url(self):
+        item = Item("x:1", "X", "title", "", "https://x.com/example/status/1", "2026-08-01T14:38:57+00:00")
         dashboard = render_dashboard([item])
-        # The "copy AI variant" button should NOT contain the raw description text
-        # It should contain the variant_for text instead
-        self.assertIn("copy AI variant", dashboard)
+        self.assertIn(f'data-copy="{item.url}" onclick="copyPost(this)">copy post</button>', dashboard)
 
-    def test_fallback_variants_have_no_filler_text(self):
-        item = Item(
-            id="x:1",
-            source="X",
-            title="title",
-            description="summary",
-            url="https://x.com/a",
-            published_at="2026-08-01T14:38:57+00:00",
-        )
-        pack = fallback_pack(item, {"projects": [{"name": "test"}], "opinions": ["measure real cost"]})
-        filler = ["my take", "this is the part i would test in", "interesting result", "the headline is interesting"]
-        for variant in pack["variants"]:
-            for phrase in filler:
-                self.assertNotIn(phrase, variant["text"], f"found filler '{phrase}' in {variant['kind']} variant")
+    def test_copy_post_without_safe_url_copies_only_source_text(self):
+        item = Item("x:1", "X", "title", "real source text", "javascript:alert(1)", "2026-08-01T14:38:57+00:00")
+        dashboard = render_dashboard([item])
+        self.assertIn('data-copy="real source text" onclick="copyPost(this)">copy post</button>', dashboard)
+        self.assertNotIn("javascript:", dashboard)
 
-    def test_copy_error_has_visible_css_class(self):
+    def test_copy_ai_variant_uses_generated_and_edited_text(self):
+        item = Item("x:1", "X", "title", "real source text", "https://x.com/example/status/1", "2026-08-01T14:38:57+00:00")
+        generated = 'generated "take" & </textarea><script>alert(1)</script> — 你好 😀'
+        pack = {
+            "status": "generated",
+            "source_signature": item_signature(item),
+            "variants": [
+                {"kind": kind, "label": kind, "text": generated if kind == "post" else kind}
+                for kind in ("post", "opinion", "reply", "repost")
+            ],
+            "claims": [],
+            "stats": [],
+            "image": {},
+        }
+        dashboard = render_dashboard([replace(item, pack=pack)])
+        escaped = html.escape(generated, quote=True)
+        self.assertIn(f'data-copy="{escaped}" data-variant="post" onclick="copyPost(this)">copy AI variant</button>', dashboard)
+        self.assertIn(f'>{escaped}</textarea>', dashboard)
+        self.assertNotIn("<script>alert(1)</script>", dashboard)
+        self.assertIn("button.closest('.variant')?.querySelector('.variant-text')", dashboard)
+        self.assertIn("const text = editor ? editor.value : button.dataset.copy", dashboard)
+
+    def test_copy_failure_is_visibly_signaled(self):
         dashboard = render_dashboard([Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")])
-        self.assertIn(".copy.error", dashboard)
-
-    def test_copy_error_class_used_in_js(self):
-        dashboard = render_dashboard([Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")])
+        self.assertIn("button.textContent = copied ? 'copied' : 'copy failed'", dashboard)
         self.assertIn("button.classList.toggle('error', !copied)", dashboard)
+        self.assertIn(".copy.error", dashboard)
         self.assertIn("button.classList.remove('error')", dashboard)
+
     def test_parse_x_post_url_valid(self):
-        self.assertEqual(parse_x_post_url("https://x.com/user/status/1234567890"), "1234567890")
-        self.assertEqual(parse_x_post_url("https://twitter.com/user/status/1234567890"), "1234567890")
-        self.assertEqual(parse_x_post_url("https://www.x.com/user/status/1234567890"), "1234567890")
-        self.assertEqual(parse_x_post_url("https://x.com/user/status/1234567890?lang=en"), "1234567890")
+        cases = [
+            "https://x.com/user/status/1234567890",
+            "https://twitter.com/user/status/1234567890",
+            "HTTPS://WWW.X.COM/User_1/status/1234567890",
+            "https://x.com/user/status/1234567890/photo/1?lang=en#media",
+            "https://x.com/i/web/status/1234567890",
+        ]
+        for url in cases:
+            with self.subTest(url=url):
+                self.assertEqual(parse_x_post_url(url), "1234567890")
 
-    def test_parse_x_post_url_invalid(self):
-        self.assertIsNone(parse_x_post_url(""))
-        self.assertIsNone(parse_x_post_url("not a url"))
-        self.assertIsNone(parse_x_post_url("https://youtube.com/watch?v=123"))
-        self.assertIsNone(parse_x_post_url("https://x.com/user"))
-        self.assertIsNone(parse_x_post_url("https://x.com/user/status/"))
-        self.assertIsNone(parse_x_post_url("https://x.com/user/status/abc"))
+    def test_parse_x_post_url_rejects_hostile_and_malformed_values(self):
+        cases = [
+            None,
+            123,
+            "",
+            "not a url",
+            "javascript://x.com/user/status/123",
+            "https://youtube.com/watch?v=123",
+            "https://x.com.evil.example/user/status/123",
+            "https://user:password@x.com/user/status/123",
+            "https://x.com:443/user/status/123",
+            "https://x.com/status/123",
+            "https://x.com/user/status/",
+            "https://x.com/user/status/abc",
+            "https://x.com/user/status/123abc",
+            "https://x.com/user/status/123/garbage",
+            "https://[::1",
+        ]
+        for url in cases:
+            with self.subTest(url=url):
+                self.assertIsNone(parse_x_post_url(url))
 
-    def test_fetch_x_post_by_url_success(self):
+    def test_fetch_x_post_by_url_uses_official_api(self):
         payload = b'{"data":{"id":"1","text":"new model 20% faster","author_id":"u","created_at":"2026-08-01T14:38:57Z","public_metrics":{"like_count":4}},"includes":{"users":[{"id":"u","username":"vraj"}]}}'
-        with patch("ai_digest.request_bytes", return_value=payload):
-            item = fetch_x_post_by_url("token", "https://x.com/vraj/status/1")
+        with patch("ai_digest.request_bytes", return_value=payload) as request:
+            item = fetch_x_post_by_url("secret-token", "https://twitter.com/vraj/status/1?x=untrusted")
         self.assertEqual(item.id, "x:1")
         self.assertEqual(item.author, "@vraj")
         self.assertIn("new model 20% faster", item.title)
+        self.assertTrue(request.call_args.args[0].startswith("https://api.x.com/2/tweets/1?"))
+        self.assertEqual(request.call_args.kwargs["headers"]["Authorization"], "Bearer secret-token")
+        self.assertEqual(request.call_args.kwargs["timeout"], 2)
 
     def test_fetch_x_post_by_url_invalid_url(self):
-        with self.assertRaises(RuntimeError):
+        with self.assertRaisesRegex(RuntimeError, "could not fetch post: invalid URL"):
             fetch_x_post_by_url("token", "https://youtube.com/watch?v=123")
 
-    def test_fetch_x_post_by_url_api_failure(self):
-        with patch("ai_digest.request_bytes", side_effect=RuntimeError("API error")):
-            with self.assertRaises(RuntimeError) as ctx:
-                fetch_x_post_by_url("token", "https://x.com/user/status/1")
-        self.assertIn("could not fetch post", str(ctx.exception).lower())
+    def test_fetch_x_post_by_url_wraps_api_and_payload_failures(self):
+        failures = [RuntimeError("429 rate limited"), TimeoutError("timed out"), b"not json", b"null", b"{}", b'{"data":[]}', b'{"data":{"id":"1"}}']
+        for failure in failures:
+            with self.subTest(failure=failure):
+                effect = failure if isinstance(failure, Exception) else None
+                with patch("ai_digest.request_bytes", side_effect=effect, return_value=None if effect else failure):
+                    with self.assertRaisesRegex(RuntimeError, "^could not fetch post"):
+                        fetch_x_post_by_url("token", "https://x.com/user/status/1")
 
-    def test_dashboard_has_paste_input(self):
+    def test_dashboard_paste_input_is_honest_about_static_file_operation(self):
         dashboard = render_dashboard([])
-        self.assertIn('paste-url', dashboard)
-        self.assertIn('fetch post', dashboard.lower())
-        self.assertIn('paste-error', dashboard)
+        self.assertIn('id="paste-url"', dashboard)
+        self.assertIn('fetch post via terminal', dashboard.lower())
+        self.assertIn('new URL(url)', dashboard)
+        self.assertIn('static dashboard cannot fetch directly', dashboard.lower())
+        self.assertNotIn("' + url + '", dashboard)
+
+    def test_paste_url_main_displays_post_without_duplicates_or_token_leaks(self):
+        payload = b'{"data":{"id":"1","text":"fresh fetched text","author_id":"u","created_at":"2026-08-01T14:38:57Z"},"includes":{"users":[{"id":"u","username":"vraj"}]}}'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stale = Item("x:1", "X", "stale", "stale text", "https://x.com/vraj/status/1", "2026-07-01T00:00:00+00:00")
+            existing = Item("x:2", "X", "keep me", "existing artifact", "https://x.com/vraj/status/2", "2026-08-02T00:00:00+00:00")
+            archived = Item("x:3", "X", "archive", "archived artifact", "https://x.com/vraj/status/3", "2026-06-01T00:00:00+00:00")
+            state_path = root / "state.json"
+            dashboard_path = root / "index.html"
+            state_path.write_text(json.dumps({"items": [asdict(stale), asdict(existing)], "archive_items": [asdict(archived)], "pending_items": [], "posted_ids": [], "source_health": {}}))
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({"state_file": str(state_path), "dashboard_file": str(dashboard_path), "profile_file": str(root / "profile.json"), "max_feed_items": 50, "max_archive_items": 500}))
+            with patch("sys.argv", ["ai_digest.py", "--config", str(config_path), "--paste-url", "https://x.com/vraj/status/1"]), patch.dict(os.environ, {"X_BEARER_TOKEN": "secret-token"}, clear=True), patch("ai_digest.refresh_user_token"), patch("ai_digest.request_bytes", return_value=payload), patch("builtins.print"):
+                main()
+            state = json.loads(state_path.read_text())
+            self.assertEqual([item["id"] for item in state["items"]].count("x:1"), 1)
+            self.assertEqual(state["items"][0]["description"], "fresh fetched text")
+            self.assertIn("x:2", {item["id"] for item in state["items"]})
+            self.assertIn("x:3", {item["id"] for item in state["archive_items"]})
+            dashboard = dashboard_path.read_text()
+            self.assertIn("fresh fetched text", dashboard)
+            self.assertIn("copy post", dashboard)
+            self.assertIn("copy AI variant", dashboard)
+            self.assertNotIn("secret-token", dashboard)
+
+    def test_paste_url_main_api_failure_preserves_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_path = root / "state.json"
+            dashboard_path = root / "index.html"
+            state_path.write_text('{"items":[],"archive_items":[],"pending_items":[],"posted_ids":[],"source_health":{}}')
+            dashboard_path.write_text("existing dashboard")
+            original_state = state_path.read_text()
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({"state_file": str(state_path), "dashboard_file": str(dashboard_path)}))
+            with patch("sys.argv", ["ai_digest.py", "--config", str(config_path), "--paste-url", "https://x.com/vraj/status/1"]), patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "token"}, clear=True), patch("ai_digest.refresh_user_token"), patch("ai_digest.request_bytes", side_effect=RuntimeError("429 rate limited")):
+                with self.assertRaisesRegex(SystemExit, "could not fetch post"):
+                    main()
+            self.assertEqual(state_path.read_text(), original_state)
+            self.assertEqual(dashboard_path.read_text(), "existing dashboard")
 
     def test_variants_are_editable_textareas(self):
         item = Item(
@@ -401,52 +517,63 @@ class DigestTests(unittest.TestCase):
         self.assertIn('<textarea', dashboard)
         self.assertIn('class="variant-text"', dashboard)
 
-    def test_model_pack_accepts_timeline_context(self):
-        pack = fallback_pack(
-            Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00"),
-            {"projects": [], "opinions": []},
-        )
-        self.assertIsNotNone(pack)
-        # make_content_pack with no API key uses fallback, timeline_context is a no-op
-        # But the function signature should accept it
-        pack2 = make_content_pack(
-            Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00"),
-            {"projects": [], "opinions": []},
-            None, None, None,
-            timeline_context=["hot take on AI models"]
-        )
-        self.assertIsNotNone(pack2)
+    def test_model_pack_serializes_real_timeline_items_and_bounds_context(self):
+        item = Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
+        timeline_item = Item("x:2", "X", "ignored title", "真实 <b>timeline</b> 😀", "https://x.com/b", "2026-08-01T14:39:57+00:00", author="@alice")
+        context = [
+            timeline_item,
+            {"description": "dict\npost", "author": "@bob", "token": "secret-token"},
+            "plain <i>timeline</i>",
+            None,
+            42,
+            *(f"post {index}" for index in range(20)),
+        ]
+        payload = {"choices": [{"message": {"content": json.dumps({"summary": "s", "post": "p", "opinion": "o", "reply": "r", "repost": "rc", "image_prompt": "ip", "image_alt": "ia"})}}]}
+        with patch("ai_digest.request_json", return_value=payload) as request:
+            pack = make_content_pack(item, {"projects": [], "opinions": []}, "key", "https://api.openai.com/v1", "gpt-4o-mini", context)
 
-    def test_model_pack_prompt_includes_timeline_context(self):
+        prompt = request.call_args.kwargs["payload"]["messages"][1]["content"]
+        serialized = prompt.split("recent X timeline context (for reference): ", 1)[1].split("\nSource evidence:", 1)[0]
+        timeline = json.loads(serialized)
+        self.assertEqual(timeline[:3], [
+            {"author": "@alice", "text": "真实 timeline 😀"},
+            {"author": "@bob", "text": "dict post"},
+            {"text": "plain timeline"},
+        ])
+        self.assertEqual(len(timeline), 20)
+        self.assertEqual(timeline[-1]["text"], "post 16")
+        self.assertNotIn("secret-token", prompt)
+        self.assertEqual({variant["kind"] for variant in pack["variants"]}, {"post", "opinion", "reply", "repost"})
+
+    def test_model_pack_prompt_is_varied_and_not_character_prescriptive(self):
         item = Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
         payload = {"choices": [{"message": {"content": json.dumps({"summary": "s", "post": "p", "opinion": "o", "reply": "r", "repost": "rc", "image_prompt": "ip", "image_alt": "ia"})}}]}
-        with patch("ai_digest.request_json", return_value=payload) as mock:
-            make_content_pack(
-                item,
-                {"projects": [], "opinions": []},
-                "key", "https://api.openai.com/v1", "gpt-4o-mini",
-                timeline_context=["someone arguing agents need cheaper evals", "another hot take on model pricing"],
-            )
-        sent_prompt = mock.call_args[1]["payload"]["messages"][1]["content"]
-        self.assertIn("recent X timeline context", sent_prompt)
-        self.assertIn("agents need cheaper evals", sent_prompt)
-        self.assertNotIn("Keep each social field under 240", sent_prompt)
+        with patch("ai_digest.request_json", return_value=payload) as request:
+            make_content_pack(item, {"projects": [], "opinions": []}, "key", "https://api.openai.com/v1", "gpt-4o-mini", ["agents need cheaper evals"])
+        prompt = request.call_args.kwargs["payload"]["messages"][1]["content"]
+        self.assertIn("hot take", prompt)
+        self.assertIn("question", prompt)
+        self.assertIn("thread idea", prompt)
+        self.assertNotIn("Keep each social field under 240", prompt)
 
-    def test_fallback_pack_has_no_remaining_filler(self):
-        item = Item(
-            id="x:1",
-            source="X",
-            title="title",
-            description="summary",
-            url="https://x.com/a",
-            published_at="2026-08-01T14:38:57+00:00",
-        )
-        pack = fallback_pack(item, {"projects": [{"name": "test"}], "opinions": ["measure real cost"]})
-        templates = ["my take", "this is the part i would test in", "interesting result", "the headline is interesting", "the failure mode is the real story"]
-        for variant in pack["variants"]:
-            for phrase in templates:
-                self.assertNotIn(phrase, variant["text"], f"found template '{phrase}' in {variant['kind']} variant")
-
+    def test_failed_or_malformed_llm_response_uses_source_fallback(self):
+        item = Item("x:1", "X", "source title", "source summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
+        failures = [
+            TimeoutError("slow model"),
+            {},
+            {"choices": []},
+            {"choices": [{"message": {"content": "garbage"}}]},
+            {"choices": [{"message": {"content": '{"summary":"partial"}'}}]},
+            {"choices": [{"message": {"content": json.dumps({"summary": "s", "post": [], "opinion": "o", "reply": "r", "repost": "rc"})}}]},
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure):
+                kwargs = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
+                with patch("ai_digest.request_json", **kwargs):
+                    pack = make_content_pack(item, {}, "key", "https://api.openai.com/v1", "gpt-4o-mini", ["real timeline post"])
+                self.assertEqual(pack["status"], "fallback")
+                self.assertEqual(pack["summary"], "source summary")
+                self.assertNotIn("my take", "".join(variant["text"] for variant in pack["variants"]))
 
 
 if __name__ == "__main__":
