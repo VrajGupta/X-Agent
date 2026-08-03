@@ -472,13 +472,6 @@ def profile_text(profile):
     )
 
 
-def project_for(item, profile):
-    text = f"{item.title} {item.description} {' '.join(item.categories)}".lower()
-    preferred = "Media-Agent" if any(word in text for word in ("agent", "automation", "audio", "video")) else "skills"
-    projects = profile.get("projects") or []
-    return next((project["name"] for project in projects if project.get("name") == preferred), projects[0].get("name", preferred) if projects else preferred)
-
-
 def item_signature(item):
     value = "\0".join((item.title, item.description, item.url, item.image_url))
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -490,14 +483,12 @@ def pack_stats(item):
 
 def fallback_pack(item, profile):
     summary = fallback_summary(item)
-    opinions = profile.get("opinions") or ["measure the real task, not just the headline"]
-    opinion = opinions[0]
-    project = project_for(item, profile)
+    post = summary if clean_text(item.title) == summary else f"{item.title}\n\n{summary}"
     variants = [
-        {"kind": "post", "label": "original post", "text": clip_post(f"{item.title}\n\n{summary}", item.url)},
-        {"kind": "opinion", "label": "my opinion", "text": clip_post(f"{opinion}\n\n— testing in {project}")},
-        {"kind": "reply", "label": "reply", "text": clip_post(f"{summary}\n\n{opinion}")},
-        {"kind": "repost", "label": "repost with comment", "text": clip_post(f"{summary}", item.url)},
+        {"kind": "post", "label": "original post", "text": clip_post(post, item.url)},
+        {"kind": "opinion", "label": "my opinion", "text": clip_post(summary)},
+        {"kind": "reply", "label": "reply", "text": clip_post(summary)},
+        {"kind": "repost", "label": "repost with comment", "text": clip_post(summary, item.url)},
     ]
     claims = [{"text": claim, "source": item.url} for claim in (item.claims or extract_claims(item.description))]
     image_prompt = f"dark editorial terminal card about {item.title}; show the key tradeoff, one clear number, blue-slate background, no logos"
@@ -685,8 +676,9 @@ def render_dashboard(items, profile=None, title="vraj ai digest", source_health=
         url = safe_url(value)
         return f"<a href=\"{attr(url)}\" target=\"_blank\" rel=\"noreferrer\">{label}</a>" if url else f"<span class=\"muted\">{label} unavailable</span>"
 
-    def copy_button(text, label="copy for X"):
-        return f"<button class=\"copy\" data-copy=\"{attr(text)}\" onclick=\"copyPost(this)\">{label}</button>"
+    def copy_button(text, label="copy for X", variant=""):
+        target = f" data-variant=\"{attr(variant)}\"" if variant else ""
+        return f"<button class=\"copy\" data-copy=\"{attr(text)}\"{target} onclick=\"copyPost(this)\">{label}</button>"
 
     source_counts = {}
     for item in items:
@@ -711,11 +703,12 @@ def render_dashboard(items, profile=None, title="vraj ai digest", source_health=
         image = pack.get("image", {})
         image_html = f"<img src=\"{attr(safe_url(image.get('url')))}\" alt=\"{attr(image.get('alt'))}\" loading=\"lazy\">" if safe_url(image.get("url")) else "<div class=\"image-placeholder\">image idea</div>"
         image_prompt = image.get("prompt", "")
+        source_copy = "\n\n".join(filter(None, (str(item.description or ""), safe_url(item.url))))
         cards.append(
             f"<article class=\"source-card\" data-search=\"{attr((item.title + ' ' + item.summary + ' ' + ' '.join(item.categories)).lower())}\">"
             f"<header><div><div class=\"meta\">{attr(item.source)}{attr(' · ' + item.author if item.author else '')} · {attr(item.published_at[:10])}</div><h2>{attr(item.title)}</h2></div><span class=\"status {attr(pack.get('status'))}\">{attr(pack.get('status'))}</span></header>"
             f"<p class=\"summary\">{attr(pack.get('summary') or fallback_summary(item))}</p>"
-            f"<div class=\"source-actions\">{link(item.url, 'read source')} {copy_button(item.description + ('\n\n' + safe_url(item.url) if safe_url(item.url) else ''), 'copy post')} {copy_button(variant_for(item, profile, 'post'), 'copy AI variant')}</div>"
+            f"<div class=\"source-actions\">{link(item.url, 'read source')} {copy_button(source_copy, 'copy post')} {copy_button(variant_for(item, profile, 'post'), 'copy AI variant', 'post')}</div>"
             f"<div class=\"pack\">{''.join(variants)}</div>"
             f"<div class=\"evidence\"><div><div class=\"eyebrow\">evidence</div><div class=\"metrics\">{metrics}</div><ul>{claims}</ul></div><div class=\"visual\">{image_html}<p>{attr(image_prompt)}</p>{copy_button(image_prompt, 'copy image idea')}</div></div>"
             "</article>"
@@ -809,7 +802,7 @@ let filter = 'all';
 function refresh() {{ const query = document.querySelector('#search').value.toLowerCase(); cards.forEach(card => {{ const text = card.dataset.search; const kind = filter === 'all' || card.querySelector(`[data-kind=\"${{filter}}\"]`); card.hidden = !text.includes(query) || !kind; }}); }}
 document.querySelector('#search').addEventListener('input', refresh);
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {{ filter = button.dataset.filter; document.querySelectorAll('.filter').forEach(item => item.classList.toggle('active', item === button)); refresh(); }}));
-async function copyPost(button) {{ let copied = false; const text = button.dataset.copy; try {{ if (navigator.clipboard && window.isSecureContext) {{ await navigator.clipboard.writeText(text); copied = true; }} }} catch {{}} if (!copied) {{ try {{ const area = document.createElement('textarea'); area.value = text; area.style.position = 'fixed'; area.style.opacity = '0'; document.body.appendChild(area); area.select(); copied = document.execCommand('copy'); area.remove(); }} catch {{}} }} const old = button.textContent; button.textContent = copied ? 'copied' : 'copy failed'; button.classList.toggle('error', !copied); setTimeout(() => {{ button.textContent = old; button.classList.remove('error'); }}, 1400); }}
+async function copyPost(button) {{ let copied = false; const editor = button.closest('.variant')?.querySelector('.variant-text') || (button.dataset.variant ? button.closest('.source-card')?.querySelector(`.variant-text[data-kind="${{button.dataset.variant}}"]`) : null); const text = editor ? editor.value : button.dataset.copy; try {{ if (navigator.clipboard && window.isSecureContext) {{ await navigator.clipboard.writeText(text); copied = true; }} }} catch {{}} if (!copied) {{ try {{ const area = document.createElement('textarea'); area.value = text; area.style.position = 'fixed'; area.style.opacity = '0'; document.body.appendChild(area); area.select(); copied = document.execCommand('copy'); area.remove(); }} catch {{}} }} const old = button.textContent; button.textContent = copied ? 'copied' : 'copy failed'; button.classList.toggle('error', !copied); setTimeout(() => {{ button.textContent = old; button.classList.remove('error'); }}, 1400); }}
 
 document.querySelector('#fetch-post')?.addEventListener('click', () => {{
   const input = document.querySelector('#paste-url');

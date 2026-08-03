@@ -167,12 +167,21 @@ class DigestTests(unittest.TestCase):
         self.assertIn("custom digest", dashboard)
         self.assertNotIn("javascript:", dashboard)
 
-    def test_profile_opinion_changes_fallback_pack(self):
-        profile = {"projects": [{"name": "my project"}], "opinions": ["measure task cost first"]}
-        item = Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
-        pack = fallback_pack(item, profile)
-        self.assertIn("measure task cost first", pack["variants"][1]["text"])
-        self.assertIn("my project", pack["variants"][1]["text"])
+    def test_fallback_pack_is_simple_and_source_grounded(self):
+        profile = {"projects": [{"name": "template project"}], "opinions": ["generic profile opinion"]}
+        item = Item("x:1", "X", "title", "source summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
+        variants = {variant["kind"]: variant["text"] for variant in fallback_pack(item, profile)["variants"]}
+        self.assertEqual(variants["post"], clip_post("title\n\nsource summary", item.url))
+        self.assertEqual(variants["opinion"], "source summary")
+        self.assertEqual(variants["reply"], "source summary")
+        self.assertEqual(variants["repost"], clip_post("source summary", item.url))
+        self.assertNotIn("generic profile opinion", "".join(variants.values()))
+        self.assertNotIn("template project", "".join(variants.values()))
+
+    def test_fallback_pack_does_not_duplicate_identical_title_and_summary(self):
+        item = Item("x:1", "X", "same source text", "same source text", "https://x.com/a", "2026-08-01T14:38:57+00:00")
+        post = fallback_pack(item, {})["variants"][0]["text"]
+        self.assertEqual(post, clip_post("same source text", item.url))
 
     def test_x_metrics_and_media_are_preserved(self):
         payload = b'''{"data":[{"id":"1","text":"new model 20% faster","author_id":"u","created_at":"2026-08-01T14:38:57Z","public_metrics":{"like_count":4},"attachments":{"media_keys":["m"]}}],"includes":{"users":[{"id":"u","username":"vraj"}],"media":[{"media_key":"m","type":"photo","url":"https://img.example/a.png"}]}}'''
@@ -298,58 +307,60 @@ class DigestTests(unittest.TestCase):
             self.assertEqual(path.read_text(), "KEEP=yes\nX_USER_ACCESS_TOKEN=new\n")
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
 
-    def test_copy_post_button_contains_description_and_url(self):
+    def test_copy_post_button_contains_exact_x_text_and_url(self):
         item = Item(
             id="x:1",
             source="X",
             title="a useful update",
-            description="plain summary of the result",
-            url="https://x.com/example/status/1",
+            description='real <X> text & "quotes" — 你好 😀',
+            url="https://x.com/example/status/1?a=1&b=2",
             published_at="2026-08-01T14:38:57+00:00",
         )
         dashboard = render_dashboard([item])
-        self.assertIn("copy post", dashboard)
-        self.assertIn("copy AI variant", dashboard)
-        expected = "plain summary of the result\n\nhttps://x.com/example/status/1"
-        self.assertIn(html.escape(expected, quote=True), dashboard)
+        expected = html.escape(f"{item.description}\n\n{item.url}", quote=True)
+        self.assertIn(f'data-copy="{expected}" onclick="copyPost(this)">copy post</button>', dashboard)
+        self.assertNotIn('real <X> text', dashboard)
 
-    def test_ai_variant_button_copies_variant_not_description(self):
-        item = Item(
-            id="x:1",
-            source="X",
-            title="a useful update",
-            description="real post text",
-            url="https://x.com/example/status/1",
-            published_at="2026-08-01T14:38:57+00:00",
-        )
+    def test_copy_post_with_empty_text_copies_only_url(self):
+        item = Item("x:1", "X", "title", "", "https://x.com/example/status/1", "2026-08-01T14:38:57+00:00")
         dashboard = render_dashboard([item])
-        # The "copy AI variant" button should NOT contain the raw description text
-        # It should contain the variant_for text instead
-        self.assertIn("copy AI variant", dashboard)
+        self.assertIn(f'data-copy="{item.url}" onclick="copyPost(this)">copy post</button>', dashboard)
 
-    def test_fallback_variants_have_no_filler_text(self):
-        item = Item(
-            id="x:1",
-            source="X",
-            title="title",
-            description="summary",
-            url="https://x.com/a",
-            published_at="2026-08-01T14:38:57+00:00",
-        )
-        pack = fallback_pack(item, {"projects": [{"name": "test"}], "opinions": ["measure real cost"]})
-        filler = ["my take", "this is the part i would test in", "interesting result", "the headline is interesting"]
-        for variant in pack["variants"]:
-            for phrase in filler:
-                self.assertNotIn(phrase, variant["text"], f"found filler '{phrase}' in {variant['kind']} variant")
+    def test_copy_post_without_safe_url_copies_only_source_text(self):
+        item = Item("x:1", "X", "title", "real source text", "javascript:alert(1)", "2026-08-01T14:38:57+00:00")
+        dashboard = render_dashboard([item])
+        self.assertIn('data-copy="real source text" onclick="copyPost(this)">copy post</button>', dashboard)
+        self.assertNotIn("javascript:", dashboard)
 
-    def test_copy_error_has_visible_css_class(self):
+    def test_copy_ai_variant_uses_generated_and_edited_text(self):
+        item = Item("x:1", "X", "title", "real source text", "https://x.com/example/status/1", "2026-08-01T14:38:57+00:00")
+        generated = 'generated "take" & </textarea><script>alert(1)</script> — 你好 😀'
+        pack = {
+            "status": "generated",
+            "source_signature": item_signature(item),
+            "variants": [
+                {"kind": kind, "label": kind, "text": generated if kind == "post" else kind}
+                for kind in ("post", "opinion", "reply", "repost")
+            ],
+            "claims": [],
+            "stats": [],
+            "image": {},
+        }
+        dashboard = render_dashboard([replace(item, pack=pack)])
+        escaped = html.escape(generated, quote=True)
+        self.assertIn(f'data-copy="{escaped}" data-variant="post" onclick="copyPost(this)">copy AI variant</button>', dashboard)
+        self.assertIn(f'>{escaped}</textarea>', dashboard)
+        self.assertNotIn("<script>alert(1)</script>", dashboard)
+        self.assertIn("button.closest('.variant')?.querySelector('.variant-text')", dashboard)
+        self.assertIn("const text = editor ? editor.value : button.dataset.copy", dashboard)
+
+    def test_copy_failure_is_visibly_signaled(self):
         dashboard = render_dashboard([Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")])
-        self.assertIn(".copy.error", dashboard)
-
-    def test_copy_error_class_used_in_js(self):
-        dashboard = render_dashboard([Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")])
+        self.assertIn("button.textContent = copied ? 'copied' : 'copy failed'", dashboard)
         self.assertIn("button.classList.toggle('error', !copied)", dashboard)
+        self.assertIn(".copy.error", dashboard)
         self.assertIn("button.classList.remove('error')", dashboard)
+
     def test_parse_x_post_url_valid(self):
         self.assertEqual(parse_x_post_url("https://x.com/user/status/1234567890"), "1234567890")
         self.assertEqual(parse_x_post_url("https://twitter.com/user/status/1234567890"), "1234567890")
@@ -431,22 +442,6 @@ class DigestTests(unittest.TestCase):
         self.assertIn("recent X timeline context", sent_prompt)
         self.assertIn("agents need cheaper evals", sent_prompt)
         self.assertNotIn("Keep each social field under 240", sent_prompt)
-
-    def test_fallback_pack_has_no_remaining_filler(self):
-        item = Item(
-            id="x:1",
-            source="X",
-            title="title",
-            description="summary",
-            url="https://x.com/a",
-            published_at="2026-08-01T14:38:57+00:00",
-        )
-        pack = fallback_pack(item, {"projects": [{"name": "test"}], "opinions": ["measure real cost"]})
-        templates = ["my take", "this is the part i would test in", "interesting result", "the headline is interesting", "the failure mode is the real story"]
-        for variant in pack["variants"]:
-            for phrase in templates:
-                self.assertNotIn(phrase, variant["text"], f"found template '{phrase}' in {variant['kind']} variant")
-
 
 
 if __name__ == "__main__":
