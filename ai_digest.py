@@ -107,10 +107,15 @@ def safe_url(value):
 
 
 def parse_x_post_url(url):
-    parsed = urllib.parse.urlparse(url.strip())
-    if parsed.netloc not in ("x.com", "twitter.com", "www.x.com", "www.twitter.com"):
+    if not isinstance(url, str):
         return None
-    match = re.match(r"/(?:\w+/)?status/(\d+)", parsed.path)
+    try:
+        parsed = urllib.parse.urlsplit(url.strip())
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in {"http", "https"} or parsed.netloc.lower() not in {"x.com", "twitter.com", "www.x.com", "www.twitter.com"}:
+        return None
+    match = re.fullmatch(r"/(?:(?:[A-Za-z0-9_]{1,15})/status|i/web/status)/(\d+)(?:/(?:photo|video)/\d+)?/?", parsed.path)
     return match.group(1) if match else None
 
 
@@ -337,16 +342,20 @@ def fetch_x_post_by_url(token, url):
                 "media.fields": "url,preview_image_url,type",
             }
         )
-        payload = request_bytes(f"{X_POST_URL}/{tweet_id}?{params}", headers={"Authorization": f"Bearer {token}"})
+        payload = request_bytes(
+            f"{X_POST_URL}/{tweet_id}?{params}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
+        )
         document = json.loads(payload)
-        # Single tweet endpoint returns data as object, wrap in array
-        if isinstance(document.get("data"), dict):
-            document["data"] = [document["data"]]
+        if not isinstance(document, dict) or not isinstance(document.get("data"), dict):
+            raise ValueError("empty or malformed response")
+        document["data"] = [document["data"]]
         items = parse_x_response(json.dumps(document).encode())
-        if not items:
-            raise RuntimeError("could not fetch post")
+        if not items or items[0].id != f"x:{tweet_id}":
+            raise ValueError("empty or mismatched response")
         return items[0]
-    except RuntimeError as error:
+    except Exception as error:
         raise RuntimeError(f"could not fetch post: {error}") from error
 
 
@@ -641,11 +650,11 @@ def render_rss(items, title="vraj ai digest", description="plain language AI not
 
 def render_paste_section():
     return (
-        '<section class="paste-bar" aria-label="paste x post url">'
+        '<form id="paste-form" class="paste-bar" aria-label="paste x post url">'
         '<input id="paste-url" type="url" placeholder="paste x.com or twitter.com URL" aria-label="X post URL">'
-        '<button id="fetch-post" class="filter">fetch post</button>'
-        '<span id="paste-error" class="paste-error muted"></span>'
-        "</section>"
+        '<button id="fetch-post" type="submit" class="filter">fetch post via terminal</button>'
+        '<span id="paste-error" class="paste-error muted" role="status" aria-live="polite">static dashboard cannot fetch directly without exposing your X token</span>'
+        "</form>"
     )
 
 
@@ -818,15 +827,22 @@ document.querySelector('#search').addEventListener('input', refresh);
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {{ filter = button.dataset.filter; document.querySelectorAll('.filter').forEach(item => item.classList.toggle('active', item === button)); refresh(); }}));
 async function copyPost(button) {{ let copied = false; const editor = button.closest('.variant')?.querySelector('.variant-text') || (button.dataset.variant ? button.closest('.source-card')?.querySelector(`.variant-text[data-kind="${{button.dataset.variant}}"]`) : null); const text = editor ? editor.value : button.dataset.copy; try {{ if (navigator.clipboard && window.isSecureContext) {{ await navigator.clipboard.writeText(text); copied = true; }} }} catch {{}} if (!copied) {{ try {{ const area = document.createElement('textarea'); area.value = text; area.style.position = 'fixed'; area.style.opacity = '0'; document.body.appendChild(area); area.select(); copied = document.execCommand('copy'); area.remove(); }} catch {{}} }} const old = button.textContent; button.textContent = copied ? 'copied' : 'copy failed'; button.classList.toggle('error', !copied); setTimeout(() => {{ button.textContent = old; button.classList.remove('error'); }}, 1400); }}
 
-document.querySelector('#fetch-post')?.addEventListener('click', () => {{
+document.querySelector('#paste-form')?.addEventListener('submit', event => {{
+  event.preventDefault();
   const input = document.querySelector('#paste-url');
   const error = document.querySelector('#paste-error');
   const url = input.value.trim();
   if (!url) {{ error.textContent = 'paste a URL'; return; }}
-  const valid = url.match(/^https?:\\/\\/(www\\.)?(x\\.com|twitter\\.com)\\/\\w+\\/status\\/\\d+/);
-  if (!valid) {{ error.textContent = 'invalid X post URL \u2014 use x.com/username/status/123'; return; }}
-  error.textContent = '';
-  error.textContent = 'run: python3 ai_digest.py --paste-url \"' + url + '\"';
+  let postId = '';
+  try {{
+    const parsed = new URL(url);
+    const authority = url.match(/^[a-z][a-z0-9+.-]*:\\/\\/([^/?#]+)/i)?.[1]?.toLowerCase();
+    const allowedHosts = ['x.com', 'twitter.com', 'www.x.com', 'www.twitter.com'];
+    const path = parsed.pathname.match(/^\\/(?:(?:[A-Za-z0-9_]{{1,15}})\\/status|i\\/web\\/status)\\/(\\d+)(?:\\/(?:photo|video)\\/\\d+)?\\/?$/);
+    if (['http:', 'https:'].includes(parsed.protocol) && allowedHosts.includes(authority) && path) postId = path[1];
+  }} catch {{}}
+  if (!postId) {{ error.textContent = 'invalid X post URL \\u2014 use x.com/username/status/123'; return; }}
+  error.textContent = 'static dashboard cannot fetch directly. run: python3 ai_digest.py --paste-url \"https://x.com/i/web/status/' + postId + '\"';
 }});
 </script>
 <script>
@@ -991,14 +1007,15 @@ def main():
         print(f"warning: X token refresh skipped: {error}", file=sys.stderr)
     config = load_config(args.config)
     token = os.environ.get("X_USER_ACCESS_TOKEN")
+    read_token = token or os.environ.get("X_BEARER_TOKEN")
     if args.paste_url:
         tweet_id = parse_x_post_url(args.paste_url)
         if not tweet_id:
             raise SystemExit("error: invalid X post URL — use x.com/username/status/123")
-        if not token:
-            raise SystemExit("--paste-url needs X_USER_ACCESS_TOKEN; run python3 x_auth.py first")
+        if not read_token:
+            raise SystemExit("--paste-url needs X_USER_ACCESS_TOKEN or X_BEARER_TOKEN; run python3 x_auth.py first")
         try:
-            item = fetch_x_post_by_url(token, args.paste_url)
+            item = fetch_x_post_by_url(read_token, args.paste_url)
         except RuntimeError as error:
             raise SystemExit(f"error: {error}")
         profile = load_profile(config.get("profile_file", "profile.json"))
@@ -1013,16 +1030,18 @@ def main():
         processed = replace(item, summary=pack["summary"], claims=tuple(claim["text"] for claim in pack["claims"]), pack=pack)
         with state_lock(config["state_file"]):
             state = load_state(config["state_file"])
-            old_items = [item_from_dict(v) for v in state["items"]]
-            if processed.id not in {i.id for i in old_items}:
-                old_items.insert(0, processed)
-            all_items = sorted(old_items, key=lambda i: date_key(i.published_at), reverse=True)[:int(config.get("max_feed_items", 50))]
-            retained_ids = {i.id for i in all_items}
-            archive_items = [asdict(i) for i in old_items if i.id not in retained_ids]
-            state["items"] = [asdict(i) for i in all_items]
-            state["archive_items"] = archive_items
+            current = {item.id: item for item in (item_from_dict(value) for value in state["items"]) if item.id != processed.id}
+            max_feed_items = max(1, int(config.get("max_feed_items", 50)))
+            all_items = [processed, *sorted(current.values(), key=lambda item: date_key(item.published_at), reverse=True)[: max_feed_items - 1]]
+            retained_ids = {item.id for item in all_items}
+            archive = {item.id: item for item in (item_from_dict(value) for value in state["archive_items"]) if item.id not in retained_ids and item.id != processed.id}
+            archive.update({item.id: item for item in current.values() if item.id not in retained_ids})
+            archive_items = sorted(archive.values(), key=lambda item: date_key(item.published_at), reverse=True)[: max(0, int(config.get("max_archive_items", 500)))]
+            state["items"] = [asdict(item) for item in all_items]
+            state["archive_items"] = [asdict(item) for item in archive_items]
+            state["pending_items"] = [value for value in state["pending_items"] if value.get("id") != processed.id]
             atomic_write(config["state_file"], json.dumps(state, indent=2, ensure_ascii=False) + "\n")
-            dashboard = render_dashboard(all_items, profile, config.get("feed_title", DEFAULT_CONFIG["feed_title"]), state["source_health"], len(state["pending_items"]), bool(token))
+            dashboard = render_dashboard(all_items, profile, config.get("feed_title", DEFAULT_CONFIG["feed_title"]), state["source_health"], len(state["pending_items"]), bool(read_token))
             atomic_write(config.get("dashboard_file", "out/index.html"), dashboard)
         print(f"fetched and added: {processed.title}")
         return

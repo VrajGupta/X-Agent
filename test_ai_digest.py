@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from datetime import datetime, timedelta, timezone
 
-from ai_digest import Item, clean_text, clip_post, collect, fallback_pack, fetch_x_post_by_url, fetch_x_timeline, item_signature, make_content_pack, pack_is_valid, parse_alpha_signal, parse_x_post_url, parse_x_response, render_dashboard, render_paste_section, render_x_timeline_section, render_rss, to_post_text, variant_for, x_weighted_length
+from ai_digest import Item, clean_text, clip_post, collect, fallback_pack, fetch_x_post_by_url, fetch_x_timeline, item_signature, main, make_content_pack, pack_is_valid, parse_alpha_signal, parse_x_post_url, parse_x_response, render_dashboard, render_paste_section, render_x_timeline_section, render_rss, to_post_text, variant_for, x_weighted_length
 from x_auth import pkce_values, refresh_user_token, upsert_env, validate_redirect_uri
 
 
@@ -398,42 +398,111 @@ class DigestTests(unittest.TestCase):
         self.assertIn("button.classList.remove('error')", dashboard)
 
     def test_parse_x_post_url_valid(self):
-        self.assertEqual(parse_x_post_url("https://x.com/user/status/1234567890"), "1234567890")
-        self.assertEqual(parse_x_post_url("https://twitter.com/user/status/1234567890"), "1234567890")
-        self.assertEqual(parse_x_post_url("https://www.x.com/user/status/1234567890"), "1234567890")
-        self.assertEqual(parse_x_post_url("https://x.com/user/status/1234567890?lang=en"), "1234567890")
+        cases = [
+            "https://x.com/user/status/1234567890",
+            "https://twitter.com/user/status/1234567890",
+            "HTTPS://WWW.X.COM/User_1/status/1234567890",
+            "https://x.com/user/status/1234567890/photo/1?lang=en#media",
+            "https://x.com/i/web/status/1234567890",
+        ]
+        for url in cases:
+            with self.subTest(url=url):
+                self.assertEqual(parse_x_post_url(url), "1234567890")
 
-    def test_parse_x_post_url_invalid(self):
-        self.assertIsNone(parse_x_post_url(""))
-        self.assertIsNone(parse_x_post_url("not a url"))
-        self.assertIsNone(parse_x_post_url("https://youtube.com/watch?v=123"))
-        self.assertIsNone(parse_x_post_url("https://x.com/user"))
-        self.assertIsNone(parse_x_post_url("https://x.com/user/status/"))
-        self.assertIsNone(parse_x_post_url("https://x.com/user/status/abc"))
+    def test_parse_x_post_url_rejects_hostile_and_malformed_values(self):
+        cases = [
+            None,
+            123,
+            "",
+            "not a url",
+            "javascript://x.com/user/status/123",
+            "https://youtube.com/watch?v=123",
+            "https://x.com.evil.example/user/status/123",
+            "https://user:password@x.com/user/status/123",
+            "https://x.com:443/user/status/123",
+            "https://x.com/status/123",
+            "https://x.com/user/status/",
+            "https://x.com/user/status/abc",
+            "https://x.com/user/status/123abc",
+            "https://x.com/user/status/123/garbage",
+            "https://[::1",
+        ]
+        for url in cases:
+            with self.subTest(url=url):
+                self.assertIsNone(parse_x_post_url(url))
 
-    def test_fetch_x_post_by_url_success(self):
+    def test_fetch_x_post_by_url_uses_official_api(self):
         payload = b'{"data":{"id":"1","text":"new model 20% faster","author_id":"u","created_at":"2026-08-01T14:38:57Z","public_metrics":{"like_count":4}},"includes":{"users":[{"id":"u","username":"vraj"}]}}'
-        with patch("ai_digest.request_bytes", return_value=payload):
-            item = fetch_x_post_by_url("token", "https://x.com/vraj/status/1")
+        with patch("ai_digest.request_bytes", return_value=payload) as request:
+            item = fetch_x_post_by_url("secret-token", "https://twitter.com/vraj/status/1?x=untrusted")
         self.assertEqual(item.id, "x:1")
         self.assertEqual(item.author, "@vraj")
         self.assertIn("new model 20% faster", item.title)
+        self.assertTrue(request.call_args.args[0].startswith("https://api.x.com/2/tweets/1?"))
+        self.assertEqual(request.call_args.kwargs["headers"]["Authorization"], "Bearer secret-token")
+        self.assertEqual(request.call_args.kwargs["timeout"], 2)
 
     def test_fetch_x_post_by_url_invalid_url(self):
-        with self.assertRaises(RuntimeError):
+        with self.assertRaisesRegex(RuntimeError, "could not fetch post: invalid URL"):
             fetch_x_post_by_url("token", "https://youtube.com/watch?v=123")
 
-    def test_fetch_x_post_by_url_api_failure(self):
-        with patch("ai_digest.request_bytes", side_effect=RuntimeError("API error")):
-            with self.assertRaises(RuntimeError) as ctx:
-                fetch_x_post_by_url("token", "https://x.com/user/status/1")
-        self.assertIn("could not fetch post", str(ctx.exception).lower())
+    def test_fetch_x_post_by_url_wraps_api_and_payload_failures(self):
+        failures = [RuntimeError("429 rate limited"), TimeoutError("timed out"), b"not json", b"null", b"{}", b'{"data":[]}', b'{"data":{"id":"1"}}']
+        for failure in failures:
+            with self.subTest(failure=failure):
+                effect = failure if isinstance(failure, Exception) else None
+                with patch("ai_digest.request_bytes", side_effect=effect, return_value=None if effect else failure):
+                    with self.assertRaisesRegex(RuntimeError, "^could not fetch post"):
+                        fetch_x_post_by_url("token", "https://x.com/user/status/1")
 
-    def test_dashboard_has_paste_input(self):
+    def test_dashboard_paste_input_is_honest_about_static_file_operation(self):
         dashboard = render_dashboard([])
-        self.assertIn('paste-url', dashboard)
-        self.assertIn('fetch post', dashboard.lower())
-        self.assertIn('paste-error', dashboard)
+        self.assertIn('id="paste-url"', dashboard)
+        self.assertIn('fetch post via terminal', dashboard.lower())
+        self.assertIn('new URL(url)', dashboard)
+        self.assertIn('static dashboard cannot fetch directly', dashboard.lower())
+        self.assertNotIn("' + url + '", dashboard)
+
+    def test_paste_url_main_displays_post_without_duplicates_or_token_leaks(self):
+        payload = b'{"data":{"id":"1","text":"fresh fetched text","author_id":"u","created_at":"2026-08-01T14:38:57Z"},"includes":{"users":[{"id":"u","username":"vraj"}]}}'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stale = Item("x:1", "X", "stale", "stale text", "https://x.com/vraj/status/1", "2026-07-01T00:00:00+00:00")
+            existing = Item("x:2", "X", "keep me", "existing artifact", "https://x.com/vraj/status/2", "2026-08-02T00:00:00+00:00")
+            archived = Item("x:3", "X", "archive", "archived artifact", "https://x.com/vraj/status/3", "2026-06-01T00:00:00+00:00")
+            state_path = root / "state.json"
+            dashboard_path = root / "index.html"
+            state_path.write_text(json.dumps({"items": [asdict(stale), asdict(existing)], "archive_items": [asdict(archived)], "pending_items": [], "posted_ids": [], "source_health": {}}))
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({"state_file": str(state_path), "dashboard_file": str(dashboard_path), "profile_file": str(root / "profile.json"), "max_feed_items": 50, "max_archive_items": 500}))
+            with patch("sys.argv", ["ai_digest.py", "--config", str(config_path), "--paste-url", "https://x.com/vraj/status/1"]), patch.dict(os.environ, {"X_BEARER_TOKEN": "secret-token"}, clear=True), patch("ai_digest.refresh_user_token"), patch("ai_digest.request_bytes", return_value=payload), patch("builtins.print"):
+                main()
+            state = json.loads(state_path.read_text())
+            self.assertEqual([item["id"] for item in state["items"]].count("x:1"), 1)
+            self.assertEqual(state["items"][0]["description"], "fresh fetched text")
+            self.assertIn("x:2", {item["id"] for item in state["items"]})
+            self.assertIn("x:3", {item["id"] for item in state["archive_items"]})
+            dashboard = dashboard_path.read_text()
+            self.assertIn("fresh fetched text", dashboard)
+            self.assertIn("copy post", dashboard)
+            self.assertIn("copy AI variant", dashboard)
+            self.assertNotIn("secret-token", dashboard)
+
+    def test_paste_url_main_api_failure_preserves_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_path = root / "state.json"
+            dashboard_path = root / "index.html"
+            state_path.write_text('{"items":[],"archive_items":[],"pending_items":[],"posted_ids":[],"source_health":{}}')
+            dashboard_path.write_text("existing dashboard")
+            original_state = state_path.read_text()
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({"state_file": str(state_path), "dashboard_file": str(dashboard_path)}))
+            with patch("sys.argv", ["ai_digest.py", "--config", str(config_path), "--paste-url", "https://x.com/vraj/status/1"]), patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "token"}, clear=True), patch("ai_digest.refresh_user_token"), patch("ai_digest.request_bytes", side_effect=RuntimeError("429 rate limited")):
+                with self.assertRaisesRegex(SystemExit, "could not fetch post"):
+                    main()
+            self.assertEqual(state_path.read_text(), original_state)
+            self.assertEqual(dashboard_path.read_text(), "existing dashboard")
 
     def test_variants_are_editable_textareas(self):
         item = Item(
