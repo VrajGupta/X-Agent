@@ -7,7 +7,9 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from unittest.mock import patch
 
-from ai_digest import Item, clean_text, clip_post, collect, fallback_pack, fetch_x_post_by_url, item_signature, pack_is_valid, parse_alpha_signal, parse_x_post_url, parse_x_response, render_dashboard, render_paste_section, render_rss, to_post_text, variant_for, x_weighted_length
+from datetime import datetime, timedelta, timezone
+
+from ai_digest import Item, clean_text, clip_post, collect, fallback_pack, fetch_x_post_by_url, fetch_x_timeline, item_signature, pack_is_valid, parse_alpha_signal, parse_x_post_url, parse_x_response, render_dashboard, render_paste_section, render_x_timeline_section, render_rss, to_post_text, variant_for, x_weighted_length
 from x_auth import pkce_values, refresh_user_token, upsert_env, validate_redirect_uri
 
 
@@ -42,6 +44,10 @@ def many_item_feed(count):
         for index in range(count)
     )
     return f"<rss><channel>{items}</channel></rss>".encode()
+
+
+TIMELINE_ME = b'{"data":{"id":"42","username":"vraj","name":"Vraj"}}'
+TIMELINE_PAYLOAD = b'{"data":[{"id":"t1","text":"agents getting faster","author_id":"42","created_at":"2026-08-01T14:38:57Z","public_metrics":{"like_count":7,"retweet_count":3}}],"includes":{"users":[{"id":"42","username":"vraj"}]}}'
 
 
 class DigestTests(unittest.TestCase):
@@ -208,6 +214,81 @@ class DigestTests(unittest.TestCase):
     def test_malformed_expiry_does_not_crash_refresh_check(self):
         with patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "token", "X_ACCESS_TOKEN_EXPIRES_AT": "bad"}, clear=True):
             self.assertEqual(refresh_user_token(), "token")
+
+    def test_fetch_x_timeline_resolves_me_then_timeline(self):
+        calls = []
+
+        def fake_request_bytes(url, headers=None, method="GET", body=None):
+            calls.append((url, headers))
+            return TIMELINE_ME if "/users/me" in url else TIMELINE_PAYLOAD
+
+        with patch("ai_digest.request_bytes", side_effect=fake_request_bytes):
+            items = fetch_x_timeline("secret-token", max_results=20)
+        self.assertEqual(len(calls), 2)
+        me_url, timeline_url = calls[0][0], calls[1][0]
+        self.assertIn("/users/me", me_url)
+        self.assertIn("/users/42/timelines/reverse_chronological", timeline_url)
+        self.assertIn("max_results=20", timeline_url)
+        for _, headers in calls:
+            self.assertEqual(headers["Authorization"], "Bearer secret-token")
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].id, "x:t1")
+        self.assertEqual(items[0].metrics["like_count"], 7)
+
+    def test_render_x_timeline_section_shows_unavailable_when_none(self):
+        self.assertIn("timeline unavailable", render_x_timeline_section(None))
+
+    def test_dashboard_renders_timeline_section_before_cards(self):
+        item = Item(
+            id="x:t1",
+            source="X",
+            title="agents getting faster",
+            description="agents getting faster every week",
+            url="https://x.com/vraj/status/t1",
+            published_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+            author="@vraj",
+            metrics={"like_count": 7, "retweet_count": 3},
+        )
+        card = Item("alpha:1", "AlphaSignal", "card title", "card summary", "https://example.com/1", "2026-08-01T14:38:57+00:00")
+        dashboard = render_dashboard([card], x_timeline_items=[item])
+        self.assertIn("@vraj", dashboard)
+        self.assertIn("agents getting faster every week", dashboard)
+        self.assertIn("data-timeline-id", dashboard)
+        self.assertIn("7 likes", dashboard)
+        self.assertIn("1h", dashboard)
+        self.assertLess(dashboard.find('class="timeline"'), dashboard.find('id="cards"'))
+
+    def test_dashboard_shows_timeline_unavailable_without_data(self):
+        dashboard = render_dashboard([])
+        self.assertIn("timeline unavailable", dashboard)
+
+    def test_collect_soft_fails_timeline_and_keeps_cards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {"alpha_signal_feed": "https://example.com/feed.xml", "x_queries": [], "output_file": str(root / "feed.xml"), "dashboard_file": str(root / "index.html"), "state_file": str(root / "state.json"), "profile_file": str(root / "profile.json"), "max_new_items_per_run": 10, "max_feed_items": 50}
+            with patch("ai_digest.request_bytes", side_effect=[FEED, RuntimeError("timeline down")]), patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "secret-token"}, clear=True):
+                collect(config)
+            dashboard = (root / "index.html").read_text()
+            self.assertIn("timeline unavailable", dashboard)
+            self.assertIn("Agents &amp; tools", dashboard)
+            self.assertNotIn("secret-token", dashboard)
+
+    def test_collect_passes_timeline_items_to_dashboard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {"alpha_signal_feed": "https://example.com/feed.xml", "x_queries": [], "output_file": str(root / "feed.xml"), "dashboard_file": str(root / "index.html"), "state_file": str(root / "state.json"), "profile_file": str(root / "profile.json"), "max_new_items_per_run": 10, "max_feed_items": 50}
+
+            def fake_request_bytes(url, headers=None, method="GET", body=None):
+                if "/users/me" in url or "reverse_chronological" in url:
+                    return TIMELINE_ME if "/users/me" in url else TIMELINE_PAYLOAD
+                return FEED
+
+            with patch("ai_digest.request_bytes", side_effect=fake_request_bytes), patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "secret-token"}, clear=True):
+                collect(config)
+            dashboard = (root / "index.html").read_text()
+            self.assertIn("agents getting faster", dashboard)
+            self.assertIn("timeline-post", dashboard)
+            self.assertNotIn("secret-token", dashboard)
 
     def test_upsert_env_replaces_values_and_locks_file(self):
         with tempfile.TemporaryDirectory() as directory:
