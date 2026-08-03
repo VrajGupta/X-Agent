@@ -4,7 +4,7 @@
 
 ## Product contract (1)
 
-- [[product/CONTENT_STUDIO_SPEC.md|Vraj content studio]] — Turn AI/news source items into copy-ready, opinionated content that sounds like Vraj: casual, technical, lowercase-friendly, evidence-led, and…
+- [[product/CONTENT_STUDIO_SPEC.md|Content studio v2 — real X context, real thoughts, real quotes]] — The v1 digest fetches AlphaSignal RSS + optional X search results, runs them through a template or LLM, and renders a dashboard.
 
 ## Operational setup (1)
 
