@@ -415,9 +415,9 @@ def fallback_pack(item, profile):
     project = project_for(item, profile)
     variants = [
         {"kind": "post", "label": "original post", "text": clip_post(f"{item.title}\n\n{summary}", item.url)},
-        {"kind": "opinion", "label": "my opinion", "text": clip_post(f"my take\n\n{opinion}\n\nthis is the part i would test in {project}")},
-        {"kind": "reply", "label": "reply", "text": clip_post(f"interesting result\n\ni would want to see the cost per real task before calling this a win\n\n{summary}")},
-        {"kind": "repost", "label": "repost with comment", "text": clip_post(f"the headline is interesting but the failure mode is usually the real story\n\n{summary}", item.url)},
+        {"kind": "opinion", "label": "my opinion", "text": clip_post(f"{opinion}\n\n— testing in {project}")},
+        {"kind": "reply", "label": "reply", "text": clip_post(f"{summary}\n\n{opinion}")},
+        {"kind": "repost", "label": "repost with comment", "text": clip_post(f"the failure mode is the real story\n\n{summary}", item.url)},
     ]
     claims = [{"text": claim, "source": item.url} for claim in (item.claims or extract_claims(item.description))]
     image_prompt = f"dark editorial terminal card about {item.title}; show the key tradeoff, one clear number, blue-slate background, no logos"
@@ -592,7 +592,7 @@ def render_dashboard(items, profile=None, title="vraj ai digest", source_health=
             f"<article class=\"source-card\" data-search=\"{attr((item.title + ' ' + item.summary + ' ' + ' '.join(item.categories)).lower())}\">"
             f"<header><div><div class=\"meta\">{attr(item.source)}{attr(' · ' + item.author if item.author else '')} · {attr(item.published_at[:10])}</div><h2>{attr(item.title)}</h2></div><span class=\"status {attr(pack.get('status'))}\">{attr(pack.get('status'))}</span></header>"
             f"<p class=\"summary\">{attr(pack.get('summary') or fallback_summary(item))}</p>"
-            f"<div class=\"source-actions\">{link(item.url, 'read source')} {copy_button(variant_for(item, profile, 'post'))}</div>"
+            f"<div class=\"source-actions\">{link(item.url, 'read source')} {copy_button(item.description + ('\n\n' + safe_url(item.url) if safe_url(item.url) else ''), 'copy post')} {copy_button(variant_for(item, profile, 'post'), 'copy AI variant')}</div>"
             f"<div class=\"pack\">{''.join(variants)}</div>"
             f"<div class=\"evidence\"><div><div class=\"eyebrow\">evidence</div><div class=\"metrics\">{metrics}</div><ul>{claims}</ul></div><div class=\"visual\">{image_html}<p>{attr(image_prompt)}</p>{copy_button(image_prompt, 'copy image idea')}</div></div>"
             "</article>"
@@ -617,6 +617,7 @@ a {{ color: var(--accent); font-weight: 650; text-underline-offset: 0.2em; }}
 button, input {{ font: inherit; }}
 button {{ min-height: 2.75rem; padding-inline: 1rem; border: 0; border-radius: 999px; background: var(--accent); color: var(--accent-ink); cursor: pointer; font-weight: 700; }}
 button:hover {{ background: var(--surface-raised); color: var(--text); }}
+button:active {{ transform: scale(0.96); }}
 :is(a, button, input):focus-visible {{ outline: 2px solid var(--accent); outline-offset: 3px; }}
 .hero {{ display: flex; justify-content: space-between; gap: 2rem; align-items: end; margin-bottom: 2rem; }}
 .dek {{ color: var(--muted); max-width: 55ch; margin: 0.8rem 0 0; }}
@@ -640,6 +641,7 @@ input {{ min-width: min(28rem, 100%); flex: 1; min-height: 2.75rem; padding: 0 1
 .summary {{ margin: 1rem 0; }}
 .source-actions {{ display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem; }}
 .source-actions .copy {{ min-height: 2.35rem; }}
+.copy.error {{ border: 1px solid oklch(0.6 0.15 30); background: oklch(0.6 0.15 30 / 0.15); color: oklch(0.85 0.1 30); }}
 .pack {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; margin-top: 1.2rem; }}
 .variant {{ padding: 1rem; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); }}
 .variant p {{ min-height: 5.5rem; margin: 0.5rem 0 0.8rem; }}
@@ -669,7 +671,7 @@ let filter = 'all';
 function refresh() {{ const query = document.querySelector('#search').value.toLowerCase(); cards.forEach(card => {{ const text = card.dataset.search; const kind = filter === 'all' || card.querySelector(`[data-kind=\"${{filter}}\"]`); card.hidden = !text.includes(query) || !kind; }}); }}
 document.querySelector('#search').addEventListener('input', refresh);
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {{ filter = button.dataset.filter; document.querySelectorAll('.filter').forEach(item => item.classList.toggle('active', item === button)); refresh(); }}));
-async function copyPost(button) {{ let copied = false; const text = button.dataset.copy; try {{ if (navigator.clipboard && window.isSecureContext) {{ await navigator.clipboard.writeText(text); copied = true; }} }} catch {{}} if (!copied) {{ try {{ const area = document.createElement('textarea'); area.value = text; area.style.position = 'fixed'; area.style.opacity = '0'; document.body.appendChild(area); area.select(); copied = document.execCommand('copy'); area.remove(); }} catch {{}} }} const old = button.textContent; button.textContent = copied ? 'copied' : 'copy failed'; setTimeout(() => button.textContent = old, 1400); }}
+async function copyPost(button) {{ let copied = false; const text = button.dataset.copy; try {{ if (navigator.clipboard && window.isSecureContext) {{ await navigator.clipboard.writeText(text); copied = true; }} }} catch {{}} if (!copied) {{ try {{ const area = document.createElement('textarea'); area.value = text; area.style.position = 'fixed'; area.style.opacity = '0'; document.body.appendChild(area); area.select(); copied = document.execCommand('copy'); area.remove(); }} catch {{}} }} const old = button.textContent; button.textContent = copied ? 'copied' : 'copy failed'; button.classList.toggle('error', !copied); setTimeout(() => {{ button.textContent = old; button.classList.remove('error'); }}, 1400); }}
 </script>
 </body>
 </html>

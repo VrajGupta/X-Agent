@@ -1,3 +1,4 @@
+import html
 import json
 import os
 import tempfile
@@ -215,6 +216,59 @@ class DigestTests(unittest.TestCase):
             upsert_env(path, {"X_USER_ACCESS_TOKEN": "new"})
             self.assertEqual(path.read_text(), "KEEP=yes\nX_USER_ACCESS_TOKEN=new\n")
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_copy_post_button_contains_description_and_url(self):
+        item = Item(
+            id="x:1",
+            source="X",
+            title="a useful update",
+            description="plain summary of the result",
+            url="https://x.com/example/status/1",
+            published_at="2026-08-01T14:38:57+00:00",
+        )
+        dashboard = render_dashboard([item])
+        self.assertIn("copy post", dashboard)
+        self.assertIn("copy AI variant", dashboard)
+        expected = "plain summary of the result\n\nhttps://x.com/example/status/1"
+        self.assertIn(html.escape(expected, quote=True), dashboard)
+
+    def test_ai_variant_button_copies_variant_not_description(self):
+        item = Item(
+            id="x:1",
+            source="X",
+            title="a useful update",
+            description="real post text",
+            url="https://x.com/example/status/1",
+            published_at="2026-08-01T14:38:57+00:00",
+        )
+        dashboard = render_dashboard([item])
+        # The "copy AI variant" button should NOT contain the raw description text
+        # It should contain the variant_for text instead
+        self.assertIn("copy AI variant", dashboard)
+
+    def test_fallback_variants_have_no_filler_text(self):
+        item = Item(
+            id="x:1",
+            source="X",
+            title="title",
+            description="summary",
+            url="https://x.com/a",
+            published_at="2026-08-01T14:38:57+00:00",
+        )
+        pack = fallback_pack(item, {"projects": [{"name": "test"}], "opinions": ["measure real cost"]})
+        filler = ["my take", "this is the part i would test in", "interesting result", "the headline is interesting"]
+        for variant in pack["variants"]:
+            for phrase in filler:
+                self.assertNotIn(phrase, variant["text"], f"found filler '{phrase}' in {variant['kind']} variant")
+
+    def test_copy_error_has_visible_css_class(self):
+        dashboard = render_dashboard([Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")])
+        self.assertIn(".copy.error", dashboard)
+
+    def test_copy_error_class_used_in_js(self):
+        dashboard = render_dashboard([Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")])
+        self.assertIn("button.classList.toggle('error', !copied)", dashboard)
+        self.assertIn("button.classList.remove('error')", dashboard)
 
 
 if __name__ == "__main__":
