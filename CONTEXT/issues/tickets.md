@@ -50,7 +50,7 @@ No GitHub Project is used for this workspace.
 
 ## C5 — fix copy/quote behavior
 
-**Status:** Agent Ready
+**Status:** Coding
 
 **Blocked by:** (none)
 
@@ -66,7 +66,7 @@ No GitHub Project is used for this workspace.
 
 ## C6 — add X timeline feed to dashboard
 
-**Status:** Agent Ready
+**Status:** Coding
 
 **Blocked by:** (none — uses existing X read auth)
 
@@ -102,7 +102,7 @@ No GitHub Project is used for this workspace.
 
 ## C8 — add paste X post URL feature
 
-**Status:** Agent Ready
+**Status:** Coding
 
 **Blocked by:** (none — uses existing X read auth)
 
