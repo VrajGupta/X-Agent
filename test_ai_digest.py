@@ -227,8 +227,8 @@ class DigestTests(unittest.TestCase):
     def test_fetch_x_timeline_resolves_me_then_timeline(self):
         calls = []
 
-        def fake_request_bytes(url, headers=None, method="GET", body=None):
-            calls.append((url, headers))
+        def fake_request_bytes(url, headers=None, method="GET", body=None, timeout=None):
+            calls.append((url, headers, timeout))
             return TIMELINE_ME if "/users/me" in url else TIMELINE_PAYLOAD
 
         with patch("ai_digest.request_bytes", side_effect=fake_request_bytes):
@@ -238,14 +238,34 @@ class DigestTests(unittest.TestCase):
         self.assertIn("/users/me", me_url)
         self.assertIn("/users/42/timelines/reverse_chronological", timeline_url)
         self.assertIn("max_results=20", timeline_url)
-        for _, headers in calls:
+        for _, headers, timeout in calls:
             self.assertEqual(headers["Authorization"], "Bearer secret-token")
+            self.assertEqual(timeout, 2)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].id, "x:t1")
         self.assertEqual(items[0].metrics["like_count"], 7)
 
+    def test_fetch_x_timeline_rejects_garbage_and_deduplicates_posts(self):
+        for payload in (b"{}", b'{"meta":[]}', b'{"data":{}}', b'{"data":[{}]}'):
+            with self.subTest(payload=payload), patch("ai_digest.request_bytes", side_effect=[TIMELINE_ME, payload]):
+                with self.assertRaises(RuntimeError):
+                    fetch_x_timeline("token")
+
+        duplicate_payload = json.loads(TIMELINE_PAYLOAD)
+        duplicate_payload["data"].append(duplicate_payload["data"][0])
+        with patch("ai_digest.request_bytes", side_effect=[TIMELINE_ME, json.dumps(duplicate_payload).encode()]):
+            items = fetch_x_timeline("token")
+        self.assertEqual([item.id for item in items], ["x:t1"])
+
     def test_render_x_timeline_section_shows_unavailable_when_none(self):
         self.assertIn("timeline unavailable", render_x_timeline_section(None))
+
+    def test_render_x_timeline_section_escapes_and_defaults_metrics(self):
+        item = Item("x:1", "X", "title", "<script>alert(1)</script>", "https://x.com/i/status/1", "bad", author="@user")
+        dashboard = render_x_timeline_section([item])
+        self.assertNotIn("<script>", dashboard)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", dashboard)
+        self.assertIn("0 likes · 0 reposts", dashboard)
 
     def test_dashboard_renders_timeline_section_before_cards(self):
         item = Item(
@@ -259,10 +279,12 @@ class DigestTests(unittest.TestCase):
             metrics={"like_count": 7, "retweet_count": 3},
         )
         card = Item("alpha:1", "AlphaSignal", "card title", "card summary", "https://example.com/1", "2026-08-01T14:38:57+00:00")
-        dashboard = render_dashboard([card], x_timeline_items=[item])
+        dashboard = render_dashboard([card, item], x_timeline_items=[item])
         self.assertIn("@vraj", dashboard)
         self.assertIn("agents getting faster every week", dashboard)
-        self.assertIn("data-timeline-id", dashboard)
+        self.assertIn('data-timeline-id="x:t1"', dashboard)
+        self.assertIn('data-item-id="x:t1"', dashboard)
+        self.assertIn("item.dataset.itemId === post.dataset.timelineId", dashboard)
         self.assertIn("7 likes", dashboard)
         self.assertIn("1h", dashboard)
         self.assertLess(dashboard.find('class="timeline"'), dashboard.find('id="cards"'))
@@ -282,22 +304,36 @@ class DigestTests(unittest.TestCase):
             self.assertIn("Agents &amp; tools", dashboard)
             self.assertNotIn("secret-token", dashboard)
 
-    def test_collect_passes_timeline_items_to_dashboard(self):
+    def test_collect_passes_timeline_items_to_dashboard_and_generation_queue(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config = {"alpha_signal_feed": "https://example.com/feed.xml", "x_queries": [], "output_file": str(root / "feed.xml"), "dashboard_file": str(root / "index.html"), "state_file": str(root / "state.json"), "profile_file": str(root / "profile.json"), "max_new_items_per_run": 10, "max_feed_items": 50}
+            config = {"alpha_signal_feed": "https://example.com/feed.xml", "x_queries": [], "output_file": str(root / "feed.xml"), "dashboard_file": str(root / "index.html"), "state_file": str(root / "state.json"), "profile_file": str(root / "profile.json"), "max_new_items_per_run": 0, "max_feed_items": 50}
 
-            def fake_request_bytes(url, headers=None, method="GET", body=None):
+            def fake_request_bytes(url, headers=None, method="GET", body=None, timeout=None):
                 if "/users/me" in url or "reverse_chronological" in url:
                     return TIMELINE_ME if "/users/me" in url else TIMELINE_PAYLOAD
                 return FEED
 
             with patch("ai_digest.request_bytes", side_effect=fake_request_bytes), patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "secret-token"}, clear=True):
-                collect(config)
+                _, state = collect(config)
             dashboard = (root / "index.html").read_text()
             self.assertIn("agents getting faster", dashboard)
             self.assertIn("timeline-post", dashboard)
+            self.assertIn("x:t1", {item["id"] for item in state["pending_items"]})
             self.assertNotIn("secret-token", dashboard)
+
+    def test_cached_timeline_content_survives_timeline_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {"alpha_signal_feed": "https://example.com/feed.xml", "x_queries": [], "output_file": str(root / "feed.xml"), "dashboard_file": str(root / "index.html"), "state_file": str(root / "state.json"), "profile_file": str(root / "profile.json"), "max_new_items_per_run": 10, "max_feed_items": 50}
+            with patch("ai_digest.request_bytes", side_effect=[FEED, TIMELINE_ME, TIMELINE_PAYLOAD]), patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "token"}, clear=True):
+                collect(config)
+            with patch("ai_digest.request_bytes", side_effect=[FEED, RuntimeError("rate limited")]), patch.dict(os.environ, {"X_USER_ACCESS_TOKEN": "token"}, clear=True):
+                _, state = collect(config)
+            dashboard = (root / "index.html").read_text()
+            self.assertIn("x:t1", {item["id"] for item in state["items"]})
+            self.assertIn("timeline unavailable", dashboard)
+            self.assertIn("Agents &amp; tools", dashboard)
 
     def test_upsert_env_replaces_values_and_locks_file(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -220,12 +220,12 @@ def parse_x_response(payload):
     return items
 
 
-def request_bytes(url, headers=None, method="GET", body=None):
+def request_bytes(url, headers=None, method="GET", body=None, timeout=30):
     request_headers = {"User-Agent": "vraj-ai-digest/1.0"}
     request_headers.update(headers or {})
     request = urllib.request.Request(url, headers=request_headers, method=method, data=body)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.read()
     except urllib.error.HTTPError as error:
         detail = error.read(500).decode("utf-8", "replace")
@@ -271,8 +271,11 @@ def fetch_x_timeline(token, max_results=20):
     me_payload = request_bytes(
         f"{X_ME_URL}?{urllib.parse.urlencode({'user.fields': 'username,name'})}",
         headers={"Authorization": f"Bearer {token}"},
+        timeout=2,
     )
     user_id = json.loads(me_payload)["data"]["id"]
+    if not str(user_id).isdigit():
+        raise RuntimeError("X returned an invalid user id")
     params = urllib.parse.urlencode(
         {
             "max_results": max(5, min(max_results, 100)),
@@ -285,8 +288,19 @@ def fetch_x_timeline(token, max_results=20):
     payload = request_bytes(
         f"{X_TIMELINE_URL.format(user_id=user_id)}?{params}",
         headers={"Authorization": f"Bearer {token}"},
+        timeout=2,
     )
-    return parse_x_response(payload)
+    document = json.loads(payload)
+    data = document.get("data") if isinstance(document, dict) else None
+    meta = document.get("meta") if isinstance(document, dict) else None
+    if not isinstance(data, list):
+        if isinstance(meta, dict) and meta.get("result_count") == 0:
+            return []
+        raise RuntimeError("X returned a malformed timeline")
+    items = parse_x_response(payload)
+    if document["data"] and not items:
+        raise RuntimeError("X returned a malformed timeline")
+    return list({item.id: item for item in items}.values())
 
 
 def fetch_x_items(token, queries, max_results):
@@ -639,7 +653,7 @@ def render_paste_section():
 
 def render_x_timeline_section(items):
     def esc(value):
-        return html.escape(str(value or ""), quote=True)
+        return html.escape(str("" if value is None else value), quote=True)
 
     if items is None:
         return '<section class="timeline" aria-label="x timeline"><div class="eyebrow">x timeline</div><p class="muted">timeline unavailable</p></section>'
@@ -648,7 +662,7 @@ def render_x_timeline_section(items):
         handle = item.author or "x"
         likes = item.metrics.get("like_count", 0)
         retweets = item.metrics.get("retweet_count", 0)
-        counts = f"<span class=\"timeline-counts\">{likes} likes · {retweets} reposts</span>" if item.metrics else ""
+        counts = f"<span class=\"timeline-counts\">{esc(likes)} likes · {esc(retweets)} reposts</span>"
         posts.append(
             f"<button type=\"button\" class=\"timeline-post\" data-timeline-id=\"{esc(item.id)}\" aria-pressed=\"false\">"
             f"<span class=\"timeline-meta\">{esc(handle)} · {esc(relative_time(item.published_at))}</span>"
@@ -705,7 +719,7 @@ def render_dashboard(items, profile=None, title="vraj ai digest", source_health=
         image_prompt = image.get("prompt", "")
         source_copy = "\n\n".join(filter(None, (str(item.description or ""), safe_url(item.url))))
         cards.append(
-            f"<article class=\"source-card\" data-search=\"{attr((item.title + ' ' + item.summary + ' ' + ' '.join(item.categories)).lower())}\">"
+            f"<article class=\"source-card\" data-item-id=\"{attr(item.id)}\" data-search=\"{attr((item.title + ' ' + item.summary + ' ' + ' '.join(item.categories)).lower())}\">"
             f"<header><div><div class=\"meta\">{attr(item.source)}{attr(' · ' + item.author if item.author else '')} · {attr(item.published_at[:10])}</div><h2>{attr(item.title)}</h2></div><span class=\"status {attr(pack.get('status'))}\">{attr(pack.get('status'))}</span></header>"
             f"<p class=\"summary\">{attr(pack.get('summary') or fallback_summary(item))}</p>"
             f"<div class=\"source-actions\">{link(item.url, 'read source')} {copy_button(source_copy, 'copy post')} {copy_button(variant_for(item, profile, 'post'), 'copy AI variant', 'post')}</div>"
@@ -821,6 +835,8 @@ document.querySelectorAll('.timeline-post').forEach(post => post.addEventListene
   document.querySelectorAll('.timeline-post.selected').forEach(item => {{ item.classList.remove('selected'); item.setAttribute('aria-pressed', 'false'); }});
   post.classList.toggle('selected', !wasSelected);
   post.setAttribute('aria-pressed', String(!wasSelected));
+  const selectedCard = cards.find(item => item.dataset.itemId === post.dataset.timelineId);
+  if (!wasSelected) selectedCard?.scrollIntoView({{block: 'start'}});
 }}));
 </script>
 </body>
@@ -859,6 +875,8 @@ def collect(config):
             print(f"warning: X skipped: {error}", file=sys.stderr)
         try:
             timeline_items = fetch_x_timeline(x_token, int(config.get("x_max_results", 25)))
+            for item in timeline_items:
+                fresh[item.id] = item
         except Exception as error:
             print(f"warning: X timeline skipped: {error}", file=sys.stderr)
     else:
