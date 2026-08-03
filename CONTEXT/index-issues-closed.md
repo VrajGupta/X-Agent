@@ -4,4 +4,4 @@
 
 ## Settled issues (1)
 
-- [[issues/tickets.md|Local content studio tracker]] [done (local part 2 build)] — No GitHub Project is used for this workspace.
+- [[issues/tickets.md|Content studio tracker]] [done (local part 2 build)] — GitHub Project VrajGupta/X-Agent #11 is the canonical workflow state.
