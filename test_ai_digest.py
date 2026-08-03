@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from datetime import datetime, timedelta, timezone
 
-from ai_digest import Item, clean_text, clip_post, collect, fallback_pack, fetch_x_post_by_url, fetch_x_timeline, item_signature, pack_is_valid, parse_alpha_signal, parse_x_post_url, parse_x_response, render_dashboard, render_paste_section, render_x_timeline_section, render_rss, to_post_text, variant_for, x_weighted_length
+from ai_digest import Item, clean_text, clip_post, collect, fallback_pack, fetch_x_post_by_url, fetch_x_timeline, item_signature, make_content_pack, pack_is_valid, parse_alpha_signal, parse_x_post_url, parse_x_response, render_dashboard, render_paste_section, render_x_timeline_section, render_rss, to_post_text, variant_for, x_weighted_length
 from x_auth import pkce_values, refresh_user_token, upsert_env, validate_redirect_uri
 
 
@@ -387,6 +387,65 @@ class DigestTests(unittest.TestCase):
         self.assertIn('paste-url', dashboard)
         self.assertIn('fetch post', dashboard.lower())
         self.assertIn('paste-error', dashboard)
+
+    def test_variants_are_editable_textareas(self):
+        item = Item(
+            id="x:1",
+            source="X",
+            title="a useful update",
+            description="plain summary",
+            url="https://x.com/example/status/1",
+            published_at="2026-08-01T14:38:57+00:00",
+        )
+        dashboard = render_dashboard([item])
+        self.assertIn('<textarea', dashboard)
+        self.assertIn('class="variant-text"', dashboard)
+
+    def test_model_pack_accepts_timeline_context(self):
+        pack = fallback_pack(
+            Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00"),
+            {"projects": [], "opinions": []},
+        )
+        self.assertIsNotNone(pack)
+        # make_content_pack with no API key uses fallback, timeline_context is a no-op
+        # But the function signature should accept it
+        pack2 = make_content_pack(
+            Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00"),
+            {"projects": [], "opinions": []},
+            None, None, None,
+            timeline_context=["hot take on AI models"]
+        )
+        self.assertIsNotNone(pack2)
+
+    def test_model_pack_prompt_includes_timeline_context(self):
+        item = Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
+        payload = {"choices": [{"message": {"content": json.dumps({"summary": "s", "post": "p", "opinion": "o", "reply": "r", "repost": "rc", "image_prompt": "ip", "image_alt": "ia"})}}]}
+        with patch("ai_digest.request_json", return_value=payload) as mock:
+            make_content_pack(
+                item,
+                {"projects": [], "opinions": []},
+                "key", "https://api.openai.com/v1", "gpt-4o-mini",
+                timeline_context=["someone arguing agents need cheaper evals", "another hot take on model pricing"],
+            )
+        sent_prompt = mock.call_args[1]["payload"]["messages"][1]["content"]
+        self.assertIn("recent X timeline context", sent_prompt)
+        self.assertIn("agents need cheaper evals", sent_prompt)
+        self.assertNotIn("Keep each social field under 240", sent_prompt)
+
+    def test_fallback_pack_has_no_remaining_filler(self):
+        item = Item(
+            id="x:1",
+            source="X",
+            title="title",
+            description="summary",
+            url="https://x.com/a",
+            published_at="2026-08-01T14:38:57+00:00",
+        )
+        pack = fallback_pack(item, {"projects": [{"name": "test"}], "opinions": ["measure real cost"]})
+        templates = ["my take", "this is the part i would test in", "interesting result", "the headline is interesting", "the failure mode is the real story"]
+        for variant in pack["variants"]:
+            for phrase in templates:
+                self.assertNotIn(phrase, variant["text"], f"found template '{phrase}' in {variant['kind']} variant")
 
 
 

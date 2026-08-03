@@ -50,11 +50,7 @@ No GitHub Project is used for this workspace.
 
 ## C5 — fix copy/quote behavior
 
-**Status:** Coding
-
-**Blocked by:** (none)
-
-**Build:** Fix the copy buttons so "copy for X" copies the actual X post text + URL when available, not just AI-generated text. Add a second "copy AI variant" button for the AI-generated variant. Remove template filler text from fallback copies (no "this is the part i would test in" boilerplate).
+**Status:** Debugger Ready
 
 **Acceptance:**
 - Each post has two copy buttons: "copy post" (copies real X text + URL) and "copy AI variant" (copies AI-generated variant)
@@ -66,7 +62,7 @@ No GitHub Project is used for this workspace.
 
 ## C6 — add X timeline feed to dashboard
 
-**Status:** Coding
+**Status:** Debugger Ready
 
 **Blocked by:** (none — uses existing X read auth)
 
@@ -84,9 +80,9 @@ No GitHub Project is used for this workspace.
 
 ## C7 — fix AI generation quality with timeline context
 
-**Status:** Planned
+**Status:** Coding
 
-**Blocked by:** C6
+**Blocked by:** C6 (done)
 
 **Build:** Feed the user's recent timeline context (last ~20 posts) into the LLM prompt so generated posts reference real X discussions. Remove the hardcoded fallback templates — if LLM is unavailable, show a simple summary instead of template-y variants. Make the prompt less prescriptive to get varied output structures (hot takes, questions, thread ideas) instead of always "post/opinion/reply/repost." Add a draft + edit workflow: AI variants render as editable text areas, not read-only snippets.
 
@@ -102,7 +98,7 @@ No GitHub Project is used for this workspace.
 
 ## C8 — add paste X post URL feature
 
-**Status:** Coding
+**Status:** Debugger Ready
 
 **Blocked by:** (none — uses existing X read auth)
 

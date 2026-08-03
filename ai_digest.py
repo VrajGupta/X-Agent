@@ -497,7 +497,7 @@ def fallback_pack(item, profile):
         {"kind": "post", "label": "original post", "text": clip_post(f"{item.title}\n\n{summary}", item.url)},
         {"kind": "opinion", "label": "my opinion", "text": clip_post(f"{opinion}\n\n— testing in {project}")},
         {"kind": "reply", "label": "reply", "text": clip_post(f"{summary}\n\n{opinion}")},
-        {"kind": "repost", "label": "repost with comment", "text": clip_post(f"the failure mode is the real story\n\n{summary}", item.url)},
+        {"kind": "repost", "label": "repost with comment", "text": clip_post(f"{summary}", item.url)},
     ]
     claims = [{"text": claim, "source": item.url} for claim in (item.claims or extract_claims(item.description))]
     image_prompt = f"dark editorial terminal card about {item.title}; show the key tradeoff, one clear number, blue-slate background, no logos"
@@ -517,19 +517,22 @@ def endpoint_allowed(base_url):
     return host == "api.openai.com" or host in {"localhost", "127.0.0.1", "::1"} or os.environ.get("ALLOW_CUSTOM_LLM_ENDPOINT") == "1"
 
 
-def model_pack(item, profile, api_key, base_url, model):
+def model_pack(item, profile, api_key, base_url, model, timeline_context=None):
     if not api_key:
         return None
     if not endpoint_allowed(base_url):
         raise RuntimeError("custom LLM endpoint blocked; set ALLOW_CUSTOM_LLM_ENDPOINT=1 to opt in")
     evidence = {"title": item.title, "text": truncate(item.description, 4000), "url": item.url, "claims": list(item.claims), "metrics": item.metrics}
+    timeline_blurb = ""
+    if timeline_context:
+        timeline_blurb = "\nVraj's recent X timeline context (for reference): " + json.dumps(timeline_context[:20], ensure_ascii=False)
     prompt = f"""Create a content pack for Vraj from this source.
 Return JSON only with these string fields: summary, post, opinion, reply, repost, image_prompt, image_alt.
 Use casual human technical language. Lowercase is fine. Be opinionated about tradeoffs, not abusive toward people.
-Use only the evidence supplied. Never invent prices, benchmarks, dates, or metrics. Do not say Vraj built or tested something unless the source says so.
-The post is an original post, opinion is Vraj's take, reply is a useful reply to the source author, repost is a short comment for a repost.
-Keep each social field under 240 characters before a link is added. Make the image prompt describe a clean dark editorial graphic with one useful stat.
-Vraj's profile context: {profile_text(profile)}
+Use only the evidence supplied. Never invent prices, benchmarks, dates, or metrics.
+Generate varied content: sometimes a hot take, sometimes a question, sometimes a thread idea.
+Make the image prompt describe a clean dark editorial graphic with one useful stat.
+Vraj's profile context: {profile_text(profile)}{timeline_blurb}
 Source evidence: {json.dumps(evidence, ensure_ascii=False)}"""
     payload = request_json(
         f"{base_url.rstrip('/')}/chat/completions",
@@ -554,11 +557,11 @@ Source evidence: {json.dumps(evidence, ensure_ascii=False)}"""
     return json.loads(match.group(0))
 
 
-def make_content_pack(item, profile, api_key, base_url, model):
+def make_content_pack(item, profile, api_key, base_url, model, timeline_context=None):
     fallback = fallback_pack(item, profile)
     if not api_key:
         return fallback
-    raw = model_pack(item, profile, api_key, base_url, model)
+    raw = model_pack(item, profile, api_key, base_url, model, timeline_context)
     fields = {key: clean_post(raw.get(key, "")) for key in ("summary", "post", "opinion", "reply", "repost")}
     if not all(fields.values()):
         raise RuntimeError("LLM content pack is missing a required field")
@@ -701,7 +704,7 @@ def render_dashboard(items, profile=None, title="vraj ai digest", source_health=
         for variant in pack.get("variants", []):
             text = variant.get("text", "")
             variants.append(
-                f"<section class=\"variant\" data-kind=\"{attr(variant.get('kind'))}\"><div class=\"eyebrow\">{attr(variant.get('label'))}</div><p>{attr(text)}</p>{copy_button(text)}</section>"
+                f"<section class=\"variant\" data-kind=\"{attr(variant.get('kind'))}\"><div class=\"eyebrow\">{attr(variant.get('label'))}</div><textarea class=\"variant-text\" data-kind=\"{attr(variant.get('kind'))}\">{attr(text)}</textarea>{copy_button(text)}</section>"
             )
         claims = "".join(f"<li>{attr(claim.get('text'))} {link(claim.get('source'), 'source')}</li>" for claim in pack.get("claims", [])) or "<li class=\"muted\">no numeric claim found in the source</li>"
         metrics = "".join(f"<span class=\"metric\">{attr(stat.get('label'))} <b>{attr(stat.get('value'))}</b> {link(stat.get('source'), 'source')}</span>" for stat in pack.get("stats", [])) or "<span class=\"muted\">source metrics unavailable</span>"
@@ -765,6 +768,7 @@ input {{ min-width: min(28rem, 100%); flex: 1; min-height: 2.75rem; padding: 0 1
 .pack {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; margin-top: 1.2rem; }}
 .variant {{ padding: 1rem; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); }}
 .variant p {{ min-height: 5.5rem; margin: 0.5rem 0 0.8rem; }}
+.variant-text {{ width: 100%; min-height: 5.5rem; padding: 0.5rem; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--text); font: 0.9rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }}
 .variant .copy {{ min-height: 2.35rem; padding-inline: 0.8rem; font-size: 0.9rem; }}
 .evidence {{ display: grid; grid-template-columns: 1.3fr 0.7fr; gap: 1rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }}
 .metrics {{ display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.65rem 0; }}
@@ -910,7 +914,7 @@ def collect(config):
     model = os.environ.get("OPENAI_MODEL", config.get("openai_model", "gpt-4o-mini"))
     for item in candidates:
         try:
-            pack = make_content_pack(item, profile, api_key, base_url, model)
+            pack = make_content_pack(item, profile, api_key, base_url, model, timeline_items)
         except Exception as error:
             print(f"warning: content pack fallback for {item.id}: {error}", file=sys.stderr)
             pack = fallback_pack(item, profile)
