@@ -517,36 +517,63 @@ class DigestTests(unittest.TestCase):
         self.assertIn('<textarea', dashboard)
         self.assertIn('class="variant-text"', dashboard)
 
-    def test_model_pack_accepts_timeline_context(self):
-        pack = fallback_pack(
-            Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00"),
-            {"projects": [], "opinions": []},
-        )
-        self.assertIsNotNone(pack)
-        # make_content_pack with no API key uses fallback, timeline_context is a no-op
-        # But the function signature should accept it
-        pack2 = make_content_pack(
-            Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00"),
-            {"projects": [], "opinions": []},
-            None, None, None,
-            timeline_context=["hot take on AI models"]
-        )
-        self.assertIsNotNone(pack2)
+    def test_model_pack_serializes_real_timeline_items_and_bounds_context(self):
+        item = Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
+        timeline_item = Item("x:2", "X", "ignored title", "真实 <b>timeline</b> 😀", "https://x.com/b", "2026-08-01T14:39:57+00:00", author="@alice")
+        context = [
+            timeline_item,
+            {"description": "dict\npost", "author": "@bob", "token": "secret-token"},
+            "plain <i>timeline</i>",
+            None,
+            42,
+            *(f"post {index}" for index in range(20)),
+        ]
+        payload = {"choices": [{"message": {"content": json.dumps({"summary": "s", "post": "p", "opinion": "o", "reply": "r", "repost": "rc", "image_prompt": "ip", "image_alt": "ia"})}}]}
+        with patch("ai_digest.request_json", return_value=payload) as request:
+            pack = make_content_pack(item, {"projects": [], "opinions": []}, "key", "https://api.openai.com/v1", "gpt-4o-mini", context)
 
-    def test_model_pack_prompt_includes_timeline_context(self):
+        prompt = request.call_args.kwargs["payload"]["messages"][1]["content"]
+        serialized = prompt.split("recent X timeline context (for reference): ", 1)[1].split("\nSource evidence:", 1)[0]
+        timeline = json.loads(serialized)
+        self.assertEqual(timeline[:3], [
+            {"author": "@alice", "text": "真实 timeline 😀"},
+            {"author": "@bob", "text": "dict post"},
+            {"text": "plain timeline"},
+        ])
+        self.assertEqual(len(timeline), 20)
+        self.assertEqual(timeline[-1]["text"], "post 16")
+        self.assertNotIn("secret-token", prompt)
+        self.assertEqual({variant["kind"] for variant in pack["variants"]}, {"post", "opinion", "reply", "repost"})
+
+    def test_model_pack_prompt_is_varied_and_not_character_prescriptive(self):
         item = Item("x:1", "X", "title", "summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
         payload = {"choices": [{"message": {"content": json.dumps({"summary": "s", "post": "p", "opinion": "o", "reply": "r", "repost": "rc", "image_prompt": "ip", "image_alt": "ia"})}}]}
-        with patch("ai_digest.request_json", return_value=payload) as mock:
-            make_content_pack(
-                item,
-                {"projects": [], "opinions": []},
-                "key", "https://api.openai.com/v1", "gpt-4o-mini",
-                timeline_context=["someone arguing agents need cheaper evals", "another hot take on model pricing"],
-            )
-        sent_prompt = mock.call_args[1]["payload"]["messages"][1]["content"]
-        self.assertIn("recent X timeline context", sent_prompt)
-        self.assertIn("agents need cheaper evals", sent_prompt)
-        self.assertNotIn("Keep each social field under 240", sent_prompt)
+        with patch("ai_digest.request_json", return_value=payload) as request:
+            make_content_pack(item, {"projects": [], "opinions": []}, "key", "https://api.openai.com/v1", "gpt-4o-mini", ["agents need cheaper evals"])
+        prompt = request.call_args.kwargs["payload"]["messages"][1]["content"]
+        self.assertIn("hot take", prompt)
+        self.assertIn("question", prompt)
+        self.assertIn("thread idea", prompt)
+        self.assertNotIn("Keep each social field under 240", prompt)
+
+    def test_failed_or_malformed_llm_response_uses_source_fallback(self):
+        item = Item("x:1", "X", "source title", "source summary", "https://x.com/a", "2026-08-01T14:38:57+00:00")
+        failures = [
+            TimeoutError("slow model"),
+            {},
+            {"choices": []},
+            {"choices": [{"message": {"content": "garbage"}}]},
+            {"choices": [{"message": {"content": '{"summary":"partial"}'}}]},
+            {"choices": [{"message": {"content": json.dumps({"summary": "s", "post": [], "opinion": "o", "reply": "r", "repost": "rc"})}}]},
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure):
+                kwargs = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
+                with patch("ai_digest.request_json", **kwargs):
+                    pack = make_content_pack(item, {}, "key", "https://api.openai.com/v1", "gpt-4o-mini", ["real timeline post"])
+                self.assertEqual(pack["status"], "fallback")
+                self.assertEqual(pack["summary"], "source summary")
+                self.assertNotIn("my take", "".join(variant["text"] for variant in pack["variants"]))
 
 
 if __name__ == "__main__":
