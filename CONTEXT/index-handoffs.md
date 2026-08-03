@@ -4,5 +4,5 @@
 
 ## Handoffs (2)
 
-- [[handoffs/CONTENT_STUDIO_V2_HANDOFF.md|Content studio v2 handoff — 2026-08-03]] — Content studio v2: real X context, real thoughts, real quotes.
+- [[handoffs/CONTENT_STUDIO_V2_HANDOFF.md|Content studio v2 handoff — 2026-08-03]] — Implemented C5, C6, C7, C8 — all moved to Debugger Ready on the GitHub Project board.
 - [[handoffs/HANDOFF.md|Content studio handoff]] — Local-only delivery; no GitHub Project or push was used.

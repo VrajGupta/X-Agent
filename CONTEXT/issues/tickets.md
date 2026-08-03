@@ -80,7 +80,7 @@ No GitHub Project is used for this workspace.
 
 ## C7 — fix AI generation quality with timeline context
 
-**Status:** Coding
+**Status:** Debugger Ready
 
 **Blocked by:** C6 (done)
 
