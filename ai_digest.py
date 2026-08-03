@@ -31,6 +31,8 @@ from x_auth import load_dotenv, refresh_user_token
 ALPHA_SIGNAL_FEED = "https://alphasignal.ai/feed.xml"
 X_SEARCH_URL = "https://api.x.com/2/tweets/search/recent"
 X_POST_URL = "https://api.x.com/2/tweets"
+X_ME_URL = "https://api.x.com/2/users/me"
+X_TIMELINE_URL = "https://api.x.com/2/users/{user_id}/timelines/reverse_chronological"
 DEFAULT_QUERY = '(AI OR LLM OR agents OR inference OR evals) -is:retweet lang:en'
 TEST_POST = "testing my ai digest agent\n\nit reads AI updates and turns them into plain language notes"
 
@@ -233,6 +235,50 @@ def request_json(url, headers=None, method="GET", payload=None):
         body=body,
     )
     return json.loads(response)
+
+
+def relative_time(value):
+    try:
+        published = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return ""
+    seconds = int((datetime.now(timezone.utc) - published).total_seconds())
+    if seconds < 60:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h"
+    days = hours // 24
+    if days < 7:
+        return f"{days}d"
+    return f"{days // 7}w"
+
+
+def fetch_x_timeline(token, max_results=20):
+    if not token:
+        return None
+    me_payload = request_bytes(
+        f"{X_ME_URL}?{urllib.parse.urlencode({'user.fields': 'username,name'})}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    user_id = json.loads(me_payload)["data"]["id"]
+    params = urllib.parse.urlencode(
+        {
+            "max_results": max(5, min(max_results, 100)),
+            "tweet.fields": "author_id,created_at,lang,public_metrics,attachments",
+            "expansions": "author_id,attachments.media_keys",
+            "user.fields": "username,name",
+            "media.fields": "url,preview_image_url,type",
+        }
+    )
+    payload = request_bytes(
+        f"{X_TIMELINE_URL.format(user_id=user_id)}?{params}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    return parse_x_response(payload)
 
 
 def fetch_x_items(token, queries, max_results):
@@ -551,7 +597,33 @@ def render_rss(items, title="vraj ai digest", description="plain language AI not
     )
 
 
-def render_dashboard(items, profile=None, title="vraj ai digest", source_health=None, pending_count=0, x_connected=False):
+def render_x_timeline_section(items):
+    def esc(value):
+        return html.escape(str(value or ""), quote=True)
+
+    if items is None:
+        return '<section class="timeline" aria-label="x timeline"><div class="eyebrow">x timeline</div><p class="muted">timeline unavailable</p></section>'
+    posts = []
+    for item in items:
+        handle = item.author or "x"
+        likes = item.metrics.get("like_count", 0)
+        retweets = item.metrics.get("retweet_count", 0)
+        counts = f"<span class=\"timeline-counts\">{likes} likes · {retweets} reposts</span>" if item.metrics else ""
+        posts.append(
+            f"<button type=\"button\" class=\"timeline-post\" data-timeline-id=\"{esc(item.id)}\" aria-pressed=\"false\">"
+            f"<span class=\"timeline-meta\">{esc(handle)} · {esc(relative_time(item.published_at))}</span>"
+            f"<span class=\"timeline-text\">{esc(item.description)}</span>{counts}</button>"
+        )
+    if not posts:
+        return '<section class="timeline" aria-label="x timeline"><div class="eyebrow">x timeline</div><p class="muted">no recent posts</p></section>'
+    return (
+        '<section class="timeline" aria-label="x timeline">'
+        '<div class="timeline-head"><div class="eyebrow">x timeline</div><span class="muted">tap a post to select it</span></div>'
+        f'<div class="timeline-list">{"".join(posts)}</div></section>'
+    )
+
+
+def render_dashboard(items, profile=None, title="vraj ai digest", source_health=None, pending_count=0, x_connected=False, x_timeline_items=None):
     profile = profile or DEFAULT_PROFILE
     source_health = source_health or {}
 
@@ -655,12 +727,23 @@ li {{ margin: 0.45rem 0; }}
 .image-placeholder {{ display: grid; place-items: center; color: var(--muted); font: 0.75rem ui-monospace, monospace; text-transform: uppercase; }}
 .visual p {{ margin: 0.6rem 0; color: var(--muted); font-size: 0.9rem; }}
 .muted {{ color: var(--muted); }}
+.timeline {{ margin-bottom: 1.5rem; padding: 1rem; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }}
+.timeline-head {{ display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-bottom: 0.75rem; }}
+.timeline-list {{ display: flex; flex-direction: column; gap: 0.6rem; max-height: 24rem; overflow-y: auto; padding-right: 0.25rem; }}
+.timeline-post {{ display: block; width: 100%; min-height: 2.75rem; padding: 0.7rem 0.9rem; border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 12px; background: var(--canvas); color: var(--text); text-align: start; cursor: pointer; }}
+.timeline-post:hover {{ background: var(--surface-raised); }}
+.timeline-post:active {{ transform: scale(0.96); }}
+.timeline-post.selected {{ border-left-color: var(--accent); background: oklch(0.78 0.15 225 / 0.12); }}
+.timeline-meta {{ display: block; color: var(--muted); font: 0.72rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.05em; text-transform: uppercase; }}
+.timeline-text {{ display: block; margin-top: 0.3rem; white-space: normal; line-height: 1.45; }}
+.timeline-counts {{ display: block; margin-top: 0.4rem; color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }}
 @media (max-width: 700px) {{ .hero, .evidence {{ display: block; }} .profile {{ margin-top: 1.5rem; text-align: start; }} .projects {{ justify-content: start; }} .stats {{ grid-template-columns: repeat(2, 1fr); }} .pack {{ grid-template-columns: 1fr; }} .source-card header {{ display: block; }} .status {{ display: inline-block; margin-top: 0.8rem; }} }}
 </style>
 </head>
 <body>
 <header class=\"hero\"><div><div class=\"eyebrow\">vraj / field notes</div><h1>{attr(title)}</h1><p class=\"dek\">{attr(profile.get('bio'))}<br><span class=\"muted\">{attr(connection)} · {attr(health)}</span></p></div><aside class=\"profile\"><strong>{attr(profile.get('display_name'))} {attr(profile.get('handle'))}</strong><span>{attr(profile.get('audience'))}</span><div class=\"projects\">{projects}</div></aside></header>
 <section class=\"stats\" aria-label=\"digest stats\">{stats_html}</section>
+{render_x_timeline_section(x_timeline_items)}
 <section class=\"toolbar\" aria-label=\"content filters\"><input id=\"search\" type=\"search\" placeholder=\"search your field notes\" aria-label=\"Search content\"><button class=\"filter active\" data-filter=\"all\">all</button><button class=\"filter\" data-filter=\"post\">posts</button><button class=\"filter\" data-filter=\"opinion\">opinions</button><button class=\"filter\" data-filter=\"reply\">replies</button><button class=\"filter\" data-filter=\"repost\">reposts</button></section>
 <main id=\"cards\">{''.join(cards) or '<p class=\"muted\">no items yet</p>'}</main>
 <script>
@@ -670,6 +753,14 @@ function refresh() {{ const query = document.querySelector('#search').value.toLo
 document.querySelector('#search').addEventListener('input', refresh);
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {{ filter = button.dataset.filter; document.querySelectorAll('.filter').forEach(item => item.classList.toggle('active', item === button)); refresh(); }}));
 async function copyPost(button) {{ let copied = false; const text = button.dataset.copy; try {{ if (navigator.clipboard && window.isSecureContext) {{ await navigator.clipboard.writeText(text); copied = true; }} }} catch {{}} if (!copied) {{ try {{ const area = document.createElement('textarea'); area.value = text; area.style.position = 'fixed'; area.style.opacity = '0'; document.body.appendChild(area); area.select(); copied = document.execCommand('copy'); area.remove(); }} catch {{}} }} const old = button.textContent; button.textContent = copied ? 'copied' : 'copy failed'; setTimeout(() => button.textContent = old, 1400); }}
+</script>
+<script>
+document.querySelectorAll('.timeline-post').forEach(post => post.addEventListener('click', () => {{
+  const wasSelected = post.classList.contains('selected');
+  document.querySelectorAll('.timeline-post.selected').forEach(item => {{ item.classList.remove('selected'); item.setAttribute('aria-pressed', 'false'); }});
+  post.classList.toggle('selected', !wasSelected);
+  post.setAttribute('aria-pressed', String(!wasSelected));
+}}));
 </script>
 </body>
 </html>
@@ -696,6 +787,7 @@ def collect(config):
         print(f"warning: AlphaSignal skipped: {error}", file=sys.stderr)
 
     x_token = os.environ.get("X_USER_ACCESS_TOKEN") or os.environ.get("X_BEARER_TOKEN")
+    timeline_items = None
     if x_token:
         try:
             for item in fetch_x_items(x_token, config.get("x_queries", [DEFAULT_QUERY]), int(config.get("x_max_results", 25))):
@@ -704,6 +796,10 @@ def collect(config):
         except Exception as error:
             health["X"] = "error"
             print(f"warning: X skipped: {error}", file=sys.stderr)
+        try:
+            timeline_items = fetch_x_timeline(x_token, int(config.get("x_max_results", 25)))
+        except Exception as error:
+            print(f"warning: X timeline skipped: {error}", file=sys.stderr)
     else:
         health["X"] = "not connected"
 
@@ -771,7 +867,7 @@ def collect(config):
         "source_health": health,
     }
     rss = render_rss(all_items, config.get("feed_title", DEFAULT_CONFIG["feed_title"]), config.get("feed_description", DEFAULT_CONFIG["feed_description"]))
-    dashboard = render_dashboard(all_items, profile, config.get("feed_title", DEFAULT_CONFIG["feed_title"]), health, len(remaining_pending), bool(os.environ.get("X_USER_ACCESS_TOKEN")))
+    dashboard = render_dashboard(all_items, profile, config.get("feed_title", DEFAULT_CONFIG["feed_title"]), health, len(remaining_pending), bool(os.environ.get("X_USER_ACCESS_TOKEN")), x_timeline_items=timeline_items)
     atomic_write(config["output_file"], rss)
     atomic_write(config.get("dashboard_file", "out/index.html"), dashboard)
     atomic_write(config["state_file"], json.dumps(next_state, indent=2, ensure_ascii=False) + "\n")
