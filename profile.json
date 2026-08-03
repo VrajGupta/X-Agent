@@ -1,0 +1,57 @@
+{
+  "display_name": "Vraj",
+  "handle": "@vrajracer",
+  "bio": "building ai tools and dev workflows / agents automation and games / learning in public",
+  "audience": "developers building with AI who like useful experiments and honest tradeoffs",
+  "voice": [
+    "casual and human",
+    "technical but explain the point",
+    "lowercase is fine",
+    "short paragraphs",
+    "show the number when there is one",
+    "state the opinion clearly"
+  ],
+  "themes": [
+    "ai agents and developer workflows",
+    "skills and instructions for coding agents",
+    "model cost per task rather than token price",
+    "automation that survives real failure modes",
+    "shipping small experiments",
+    "games and playful interfaces"
+  ],
+  "opinions": [
+    "a benchmark is less useful than a measured task with a real cost",
+    "the simplest working agent beats a pile of speculative abstractions",
+    "a polished demo is interesting but the failure mode is usually the real story",
+    "good tooling should make the next correct action obvious"
+  ],
+  "projects": [
+    {
+      "name": "skills",
+      "url": "https://github.com/VrajGupta/skills",
+      "description": "developer skills with explicit invariants, gates and simple implementation rules"
+    },
+    {
+      "name": "Lullabook",
+      "url": "https://github.com/VrajGupta/Lullabook",
+      "description": "a product engineering project with structured systems and real user flows"
+    },
+    {
+      "name": "Media-Agent",
+      "url": "https://github.com/VrajGupta/Media-Agent",
+      "description": "automation for turning media workflows into repeatable tools"
+    },
+    {
+      "name": "Surf Royale",
+      "url": "https://github.com/VrajGupta/Surf-Royale",
+      "description": "a game experiment built around interaction and playful systems"
+    }
+  ],
+  "avoid": [
+    "made up benchmarks or prices",
+    "generic ai is changing everything posts",
+    "attacking a person instead of the idea",
+    "pretending a source claim is independently verified",
+    "engagement bait and follow for follow"
+  ]
+}

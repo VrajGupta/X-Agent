@@ -1,0 +1,16 @@
+{
+  "alpha_signal_feed": "https://alphasignal.ai/feed.xml",
+  "x_queries": [
+    "(AI OR LLM OR agents OR inference OR evals OR RAG OR robotics) -is:retweet lang:en"
+  ],
+  "x_max_results": 25,
+  "max_new_items_per_run": 10,
+  "max_feed_items": 50,
+  "output_file": "out/ai-digest.xml",
+  "dashboard_file": "out/index.html",
+  "state_file": "out/state.json",
+  "feed_title": "vraj ai digest",
+  "feed_description": "plain language notes from AI research and X",
+  "openai_base_url": "https://api.openai.com/v1",
+  "openai_model": "gpt-4o-mini"
+}
