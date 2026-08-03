@@ -104,6 +104,14 @@ def safe_url(value):
     return ""
 
 
+def parse_x_post_url(url):
+    parsed = urllib.parse.urlparse(url.strip())
+    if parsed.netloc not in ("x.com", "twitter.com", "www.x.com", "www.twitter.com"):
+        return None
+    match = re.match(r"/(?:\w+/)?status/(\d+)", parsed.path)
+    return match.group(1) if match else None
+
+
 def normalize_date(value):
     if not value:
         return datetime.now(timezone.utc).isoformat()
@@ -254,6 +262,32 @@ def fetch_x_items(token, queries, max_results):
         for item in parse_x_response(payload):
             items[item.id] = item
     return list(items.values())
+
+
+def fetch_x_post_by_url(token, url):
+    tweet_id = parse_x_post_url(url)
+    if not tweet_id:
+        raise RuntimeError("could not fetch post: invalid URL")
+    try:
+        params = urllib.parse.urlencode(
+            {
+                "tweet.fields": "author_id,created_at,lang,public_metrics,attachments",
+                "expansions": "author_id,attachments.media_keys",
+                "user.fields": "username,name",
+                "media.fields": "url,preview_image_url,type",
+            }
+        )
+        payload = request_bytes(f"{X_POST_URL}/{tweet_id}?{params}", headers={"Authorization": f"Bearer {token}"})
+        document = json.loads(payload)
+        # Single tweet endpoint returns data as object, wrap in array
+        if isinstance(document.get("data"), dict):
+            document["data"] = [document["data"]]
+        items = parse_x_response(json.dumps(document).encode())
+        if not items:
+            raise RuntimeError("could not fetch post")
+        return items[0]
+    except RuntimeError as error:
+        raise RuntimeError(f"could not fetch post: {error}") from error
 
 
 def load_config(path):
@@ -551,6 +585,16 @@ def render_rss(items, title="vraj ai digest", description="plain language AI not
     )
 
 
+def render_paste_section():
+    return (
+        '<section class="paste-bar" aria-label="paste x post url">'
+        '<input id="paste-url" type="url" placeholder="paste x.com or twitter.com URL" aria-label="X post URL">'
+        '<button id="fetch-post" class="filter">fetch post</button>'
+        '<span id="paste-error" class="paste-error muted"></span>'
+        "</section>"
+    )
+
+
 def render_dashboard(items, profile=None, title="vraj ai digest", source_health=None, pending_count=0, x_connected=False):
     profile = profile or DEFAULT_PROFILE
     source_health = source_health or {}
@@ -655,6 +699,8 @@ li {{ margin: 0.45rem 0; }}
 .image-placeholder {{ display: grid; place-items: center; color: var(--muted); font: 0.75rem ui-monospace, monospace; text-transform: uppercase; }}
 .visual p {{ margin: 0.6rem 0; color: var(--muted); font-size: 0.9rem; }}
 .muted {{ color: var(--muted); }}
+.paste-bar {{ display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; padding: 0.85rem; margin-bottom: 1rem; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }}
+.paste-error {{ flex: 0 0 100%; font-size: 0.9rem; }}
 @media (max-width: 700px) {{ .hero, .evidence {{ display: block; }} .profile {{ margin-top: 1.5rem; text-align: start; }} .projects {{ justify-content: start; }} .stats {{ grid-template-columns: repeat(2, 1fr); }} .pack {{ grid-template-columns: 1fr; }} .source-card header {{ display: block; }} .status {{ display: inline-block; margin-top: 0.8rem; }} }}
 </style>
 </head>
@@ -662,6 +708,7 @@ li {{ margin: 0.45rem 0; }}
 <header class=\"hero\"><div><div class=\"eyebrow\">vraj / field notes</div><h1>{attr(title)}</h1><p class=\"dek\">{attr(profile.get('bio'))}<br><span class=\"muted\">{attr(connection)} · {attr(health)}</span></p></div><aside class=\"profile\"><strong>{attr(profile.get('display_name'))} {attr(profile.get('handle'))}</strong><span>{attr(profile.get('audience'))}</span><div class=\"projects\">{projects}</div></aside></header>
 <section class=\"stats\" aria-label=\"digest stats\">{stats_html}</section>
 <section class=\"toolbar\" aria-label=\"content filters\"><input id=\"search\" type=\"search\" placeholder=\"search your field notes\" aria-label=\"Search content\"><button class=\"filter active\" data-filter=\"all\">all</button><button class=\"filter\" data-filter=\"post\">posts</button><button class=\"filter\" data-filter=\"opinion\">opinions</button><button class=\"filter\" data-filter=\"reply\">replies</button><button class=\"filter\" data-filter=\"repost\">reposts</button></section>
+{render_paste_section()}
 <main id=\"cards\">{''.join(cards) or '<p class=\"muted\">no items yet</p>'}</main>
 <script>
 const cards = [...document.querySelectorAll('.source-card')];
@@ -670,6 +717,17 @@ function refresh() {{ const query = document.querySelector('#search').value.toLo
 document.querySelector('#search').addEventListener('input', refresh);
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {{ filter = button.dataset.filter; document.querySelectorAll('.filter').forEach(item => item.classList.toggle('active', item === button)); refresh(); }}));
 async function copyPost(button) {{ let copied = false; const text = button.dataset.copy; try {{ if (navigator.clipboard && window.isSecureContext) {{ await navigator.clipboard.writeText(text); copied = true; }} }} catch {{}} if (!copied) {{ try {{ const area = document.createElement('textarea'); area.value = text; area.style.position = 'fixed'; area.style.opacity = '0'; document.body.appendChild(area); area.select(); copied = document.execCommand('copy'); area.remove(); }} catch {{}} }} const old = button.textContent; button.textContent = copied ? 'copied' : 'copy failed'; setTimeout(() => button.textContent = old, 1400); }}
+
+document.querySelector('#fetch-post')?.addEventListener('click', () => {{
+  const input = document.querySelector('#paste-url');
+  const error = document.querySelector('#paste-error');
+  const url = input.value.trim();
+  if (!url) {{ error.textContent = 'paste a URL'; return; }}
+  const   const valid = url.match(/^https?:\\/\\/(www\\.)?(x\\.com|twitter\\.com)\\/\\w+\\/status\\/\\d+/);
+  if (!valid) {{ error.textContent = 'invalid X post URL \u2014 use x.com/username/status/123'; return; }}
+  error.textContent = '';
+  error.textContent = 'run: python3 ai_digest.py --paste-url \"' + url + '\"';
+}});
 </script>
 </body>
 </html>
@@ -803,6 +861,7 @@ def main():
     parser.add_argument("--post", action="store_true", help="post one new digest item to X")
     parser.add_argument("--test-post", action="store_true", help="post one clearly labeled test message to X")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--paste-url", help="fetch and display an X post by URL")
     args = parser.parse_args()
     if args.self_test:
         self_test()
@@ -815,6 +874,42 @@ def main():
         print(f"warning: X token refresh skipped: {error}", file=sys.stderr)
     config = load_config(args.config)
     token = os.environ.get("X_USER_ACCESS_TOKEN")
+    if args.paste_url:
+        tweet_id = parse_x_post_url(args.paste_url)
+        if not tweet_id:
+            raise SystemExit("error: invalid X post URL — use x.com/username/status/123")
+        if not token:
+            raise SystemExit("--paste-url needs X_USER_ACCESS_TOKEN; run python3 x_auth.py first")
+        try:
+            item = fetch_x_post_by_url(token, args.paste_url)
+        except RuntimeError as error:
+            raise SystemExit(f"error: {error}")
+        profile = load_profile(config.get("profile_file", "profile.json"))
+        api_key = os.environ.get("OPENAI_API_KEY")
+        base_url = os.environ.get("OPENAI_BASE_URL", config.get("openai_base_url", "https://api.openai.com/v1"))
+        model = os.environ.get("OPENAI_MODEL", config.get("openai_model", "gpt-4o-mini"))
+        try:
+            pack = make_content_pack(item, profile, api_key, base_url, model)
+        except Exception as error:
+            print(f"warning: content pack fallback for {item.id}: {error}", file=sys.stderr)
+            pack = fallback_pack(item, profile)
+        processed = replace(item, summary=pack["summary"], claims=tuple(claim["text"] for claim in pack["claims"]), pack=pack)
+        with state_lock(config["state_file"]):
+            state = load_state(config["state_file"])
+            old_items = [item_from_dict(v) for v in state["items"]]
+            if processed.id not in {i.id for i in old_items}:
+                old_items.insert(0, processed)
+            all_items = sorted(old_items, key=lambda i: date_key(i.published_at), reverse=True)[:int(config.get("max_feed_items", 50))]
+            retained_ids = {i.id for i in all_items}
+            archive_items = [asdict(i) for i in old_items if i.id not in retained_ids]
+            state["items"] = [asdict(i) for i in all_items]
+            state["archive_items"] = archive_items
+            atomic_write(config["state_file"], json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+            dashboard = render_dashboard(all_items, profile, config.get("feed_title", DEFAULT_CONFIG["feed_title"]), state["source_health"], len(state["pending_items"]), bool(token))
+            atomic_write(config.get("dashboard_file", "out/index.html"), dashboard)
+        print(f"fetched and added: {processed.title}")
+        return
+
     if args.test_post:
         if not token:
             raise SystemExit("--test-post needs X_USER_ACCESS_TOKEN; run python3 x_auth.py first")

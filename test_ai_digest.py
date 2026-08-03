@@ -6,7 +6,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from unittest.mock import patch
 
-from ai_digest import Item, clean_text, clip_post, collect, fallback_pack, item_signature, pack_is_valid, parse_alpha_signal, parse_x_response, render_dashboard, render_rss, to_post_text, variant_for, x_weighted_length
+from ai_digest import Item, clean_text, clip_post, collect, fallback_pack, fetch_x_post_by_url, item_signature, pack_is_valid, parse_alpha_signal, parse_x_post_url, parse_x_response, render_dashboard, render_paste_section, render_rss, to_post_text, variant_for, x_weighted_length
 from x_auth import pkce_values, refresh_user_token, upsert_env, validate_redirect_uri
 
 
@@ -215,6 +215,44 @@ class DigestTests(unittest.TestCase):
             upsert_env(path, {"X_USER_ACCESS_TOKEN": "new"})
             self.assertEqual(path.read_text(), "KEEP=yes\nX_USER_ACCESS_TOKEN=new\n")
             self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_parse_x_post_url_valid(self):
+        self.assertEqual(parse_x_post_url("https://x.com/user/status/1234567890"), "1234567890")
+        self.assertEqual(parse_x_post_url("https://twitter.com/user/status/1234567890"), "1234567890")
+        self.assertEqual(parse_x_post_url("https://www.x.com/user/status/1234567890"), "1234567890")
+        self.assertEqual(parse_x_post_url("https://x.com/user/status/1234567890?lang=en"), "1234567890")
+
+    def test_parse_x_post_url_invalid(self):
+        self.assertIsNone(parse_x_post_url(""))
+        self.assertIsNone(parse_x_post_url("not a url"))
+        self.assertIsNone(parse_x_post_url("https://youtube.com/watch?v=123"))
+        self.assertIsNone(parse_x_post_url("https://x.com/user"))
+        self.assertIsNone(parse_x_post_url("https://x.com/user/status/"))
+        self.assertIsNone(parse_x_post_url("https://x.com/user/status/abc"))
+
+    def test_fetch_x_post_by_url_success(self):
+        payload = b'{"data":{"id":"1","text":"new model 20% faster","author_id":"u","created_at":"2026-08-01T14:38:57Z","public_metrics":{"like_count":4}},"includes":{"users":[{"id":"u","username":"vraj"}]}}'
+        with patch("ai_digest.request_bytes", return_value=payload):
+            item = fetch_x_post_by_url("token", "https://x.com/vraj/status/1")
+        self.assertEqual(item.id, "x:1")
+        self.assertEqual(item.author, "@vraj")
+        self.assertIn("new model 20% faster", item.title)
+
+    def test_fetch_x_post_by_url_invalid_url(self):
+        with self.assertRaises(RuntimeError):
+            fetch_x_post_by_url("token", "https://youtube.com/watch?v=123")
+
+    def test_fetch_x_post_by_url_api_failure(self):
+        with patch("ai_digest.request_bytes", side_effect=RuntimeError("API error")):
+            with self.assertRaises(RuntimeError) as ctx:
+                fetch_x_post_by_url("token", "https://x.com/user/status/1")
+        self.assertIn("could not fetch post", str(ctx.exception).lower())
+
+    def test_dashboard_has_paste_input(self):
+        dashboard = render_dashboard([])
+        self.assertIn('paste-url', dashboard)
+        self.assertIn('fetch post', dashboard.lower())
+        self.assertIn('paste-error', dashboard)
 
 
 if __name__ == "__main__":
