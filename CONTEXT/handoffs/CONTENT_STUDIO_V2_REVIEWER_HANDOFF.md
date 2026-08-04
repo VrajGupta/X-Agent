@@ -1,14 +1,14 @@
-# Content studio v2 part4 handoff — 2026-08-03
+# Content studio v2 reviewer handoff — 2026-08-03
 
 ## Scope and board
 
-Independent blind grade of every ticket that was in **Grader Ready** on GitHub
-Project `VrajGupta/X-Agent` #11. Project option spelling is `Grader Ready` (live
-board), treated as the skill's `Grading Ready`.
+Independent blind review of every ticket that was in **Review Ready** on GitHub
+Project `VrajGupta/X-Agent` #11. Project option spelling is `Review Ready` (live
+board), treated as the skill's `Review Ready`.
 
-Each ticket was moved `Grader Ready → Grading` before the diff was judged, then
+Each ticket was moved `Review Ready → Reviewing` before the diff was judged, then
 routed after the verdict. Queue was drained serially; board never held more than
-one item in `Grading`.
+one item in `Reviewing`.
 
 | Issue | Ticket | Verdict | Score | Bounce | Final Status |
 |---|---|---|---|---|---|
@@ -17,8 +17,8 @@ one item in `Grading`.
 | #7 | C7 — Timeline-aware AI generation | PASS | 91/100 | 1 of 3 | Done |
 | #8 | C8 — Paste X post URL | PASS | 90/100 | 1 of 3 | Done |
 
-No ticket was left in Debugging by this run. When grading began, C8 was still
-`Debugging`; it entered `Grader Ready` mid-run and was graded last after C5–C7.
+No ticket was left in Debugging by this run. When reviewing began, C8 was still
+`Debugging`; it entered `Review Ready` mid-run and was reviewed last after C5–C7.
 
 ## Gate
 
@@ -31,8 +31,8 @@ python3 -m unittest -v && python3 ai_digest.py --self-test && python3 -m py_comp
 
 Result: **exit 0** — 46 tests OK, self-test passed.
 
-Code under grade was already on branch `part3-x-agent-hardening` at
-`8c4c828cc3aae84d5537ced84607bcdee3b2cef9`. Part4 authored **no code fixes**.
+Code under review was already on branch `debugger-x-agent-hardening` at
+`8c4c828cc3aae84d5537ced84607bcdee3b2cef9`. Reviewer authored **no code fixes**.
 
 ## Verdict notes (blocking findings: none)
 
@@ -77,7 +77,7 @@ Code under grade was already on branch `part3-x-agent-hardening` at
 8 Done C8
 ```
 
-Issue grade comments:
+Issue review comments:
 - https://github.com/VrajGupta/X-Agent/issues/5#issuecomment-5165347995
 - https://github.com/VrajGupta/X-Agent/issues/6#issuecomment-5165355012
 - https://github.com/VrajGupta/X-Agent/issues/7#issuecomment-5165357744
@@ -85,6 +85,6 @@ Issue grade comments:
 
 ## Independence note
 
-Grader session did not author the graded diffs. Judgment used ticket bodies,
+Reviewer session did not author the reviewed diffs. Judgment used ticket bodies,
 diffs, gate output, and `CONTEXT/product/CONTENT_STUDIO_SPEC.md` only — no
-part2/part3 handoff rationale before verdicts.
+coder/debugger handoff rationale before verdicts.

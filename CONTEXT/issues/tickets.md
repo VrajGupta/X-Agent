@@ -1,7 +1,7 @@
 # Content studio tracker
 
 GitHub Project `VrajGupta/X-Agent` #11 is the canonical workflow state. Its live
-`Grader Ready` option is used for the documented `Grading Ready` handoff.
+`Review Ready` option is used for the documented `Review Ready` handoff.
 
 ## C1 — profile-aware content packs
 
@@ -37,9 +37,9 @@ GitHub Project `VrajGupta/X-Agent` #11 is the canonical workflow state. Its live
 
 **Verification:** `python3 -m unittest -v && python3 ai_digest.py --self-test && python3 -m py_compile ai_digest.py x_auth.py test_ai_digest.py`
 
-## C4 — hardening and grade
+## C4 — hardening and review
 
-**Status:** Done (local part 4 grade PASS; final score 87/100)
+**Status:** Done (local part 4 review PASS; final score 87/100)
 
 **Blocked by:** C3
 
@@ -51,7 +51,7 @@ GitHub Project `VrajGupta/X-Agent` #11 is the canonical workflow state. Its live
 
 ## C5 — fix copy/quote behavior
 
-**Status:** Done (part4 PASS)
+**Status:** Done (reviewer PASS)
 
 **Acceptance:**
 - Each post has two copy buttons: "copy post" (copies real X text + URL) and "copy AI variant" (copies AI-generated variant)
@@ -63,7 +63,7 @@ GitHub Project `VrajGupta/X-Agent` #11 is the canonical workflow state. Its live
 
 ## C6 — add X timeline feed to dashboard
 
-**Status:** Done (part4 PASS)
+**Status:** Done (reviewer PASS)
 
 **Blocked by:** (none — uses existing X read auth)
 
@@ -81,7 +81,7 @@ GitHub Project `VrajGupta/X-Agent` #11 is the canonical workflow state. Its live
 
 ## C7 — fix AI generation quality with timeline context
 
-**Status:** Done (part4 PASS)
+**Status:** Done (reviewer PASS)
 
 **Blocked by:** C6 (done)
 
@@ -99,7 +99,7 @@ GitHub Project `VrajGupta/X-Agent` #11 is the canonical workflow state. Its live
 
 ## C8 — add paste X post URL feature
 
-**Status:** Done (part4 PASS)
+**Status:** Done (reviewer PASS)
 
 **Blocked by:** (none — uses existing X read auth)
 
