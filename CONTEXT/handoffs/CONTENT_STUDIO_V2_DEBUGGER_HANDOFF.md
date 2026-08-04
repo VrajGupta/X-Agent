@@ -1,4 +1,4 @@
-# Content studio v2 part3 handoff — 2026-08-03
+# Content studio v2 debugger handoff — 2026-08-03
 
 ## Scope and board
 
@@ -6,16 +6,16 @@ Hardened all four issues in GitHub Project `VrajGupta/X-Agent` #11:
 
 | Issue | Ticket | Commit | Result |
 |---|---|---|---|
-| #5 | C5 copy/quote behavior | `d07ca8cb01820171c519b08dfc123243537bf68a` | Grader Ready |
-| #6 | C6 X timeline feed | `9ab4a00a6c732a619a1d48aa50c59b32cb7daf05` | Grader Ready |
-| #7 | C7 timeline-aware generation | `8c4c828cc3aae84d5537ced84607bcdee3b2cef9` | Grader Ready |
-| #8 | C8 paste X post URL | `ef9d5e4be1f76fb44dfd2eefc840ba699bb29132` | Grader Ready |
+| #5 | C5 copy/quote behavior | `d07ca8cb01820171c519b08dfc123243537bf68a` | Review Ready |
+| #6 | C6 X timeline feed | `9ab4a00a6c732a619a1d48aa50c59b32cb7daf05` | Review Ready |
+| #7 | C7 timeline-aware generation | `8c4c828cc3aae84d5537ced84607bcdee3b2cef9` | Review Ready |
+| #8 | C8 paste X post URL | `ef9d5e4be1f76fb44dfd2eefc840ba699bb29132` | Review Ready |
 
-Each issue was read back in `Debugging` before work and in `Grader Ready` after
-its gate passed. The project has a live `Grader Ready` option rather than the
-skill's exact `Grading Ready` spelling; no new status option was created.
+Each issue was read back in `Debugging` before work and in `Review Ready` after
+its gate passed. The project has a live `Review Ready` option rather than the
+skill's exact `Review Ready` spelling; no new status option was created.
 
-The personalized reviewer `.claude/agents/part3-x-agent.md` was created. The
+The personalized auditor `.claude/agents/debugger-x-agent.md` was created. The
 parallel worker wave covered C5/C6/C8 in isolated detached worktrees; C7 ran in
 a second wave after those commits. Workers did not stage, commit, push, or write
 the tracker. The parent independently applied, tested, committed, commented, and
@@ -97,5 +97,5 @@ validates the URL and emits the safe `python3 ai_digest.py --paste-url ...`
 terminal path instead of pretending to perform a credential-free browser fetch.
 This follow-up is recorded on issue #8 as well as here.
 
-Next stage: `/part4` should grade issues #5–#8 independently, blind to this
+Next stage: `/reviewer` should review issues #5–#8 independently, blind to this
 rationale, from the issue bodies and commits.

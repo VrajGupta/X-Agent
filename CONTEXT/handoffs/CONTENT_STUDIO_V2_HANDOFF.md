@@ -73,7 +73,7 @@ Final run: 40 tests passed, self-test passed, compile passed.
 
 ## Next agent
 
-All tickets in the v2 plan are built and in Debugger Ready. The next stage is `/part3` (debugging/hardening) — claim each ticket from Debugger Ready, attack it, then move to Grading Ready for `/part4`.
+All tickets in the v2 plan are built and in Debugger Ready. The next stage is `/debugger` (debugging/hardening) — claim each ticket from Debugger Ready, attack it, then move to Review Ready for `/reviewer`.
 
 ## Use
 

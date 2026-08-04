@@ -465,10 +465,10 @@ loop-me
 migrate-to-shoehorn
 obsidian-vault
 parallel-subagent-implementation
-part1
-part2
-part3
-part4
+planner
+coder
+debugger
+reviewer
 profile-gated-delivery
 prototype
 provider-integration-tdd
@@ -548,22 +548,22 @@ These rules apply across all active workspaces and repositories.
 
 ## Fleet workflow and stage-parent model
 
-The default delivery workflow is a serial four-stage fleet. GPT-5.6 Luna is the overall coordinator. It may dispatch the interactive planning work to an Opus 5 Claude Code child after the human decisions are known, while `/part2`, `/part3`, and `/part4` run as independent top-level stage-parent chats. A stage parent is the chat/session that runs a stage and, when its harness supports it, may coordinate its own one-level child workers. A native child launched from another session is not a stage parent and must not spawn nested children.
+The default delivery workflow is a serial four-stage fleet. GPT-5.6 Luna is the overall coordinator. It may dispatch the interactive planning work to an Opus 5 Claude Code child after the human decisions are known, while `/coder`, `/debugger`, and `/reviewer` run as independent top-level stage-parent chats. A stage parent is the chat/session that runs a stage and, when its harness supports it, may coordinate its own one-level child workers. A native child launched from another session is not a stage parent and must not spawn nested children.
 
 | Stage | Stage-parent model / harness | Effort | Auth route |
 |---|---|---|---|
-| `/part1` | Opus 5 in Claude Code, dispatched by Luna or run visibly | medium; high for ambiguous/high-risk plans | Claude Code subscription/login |
-| `/part2` | Kimi K3 in the Pi harness via OpenRouter | high | OpenRouter API key |
-| `/part3` | GPT-5.6 Luna in the Codex harness | **max** for adversarial debugging | Codex subscription |
-| `/part4` | Grok 4.5 in the Pi harness via OpenRouter | high or xhigh | OpenRouter API key |
+| `/planner` | Opus 5 in Claude Code, dispatched by Luna or run visibly | medium; high for ambiguous/high-risk plans | Claude Code subscription/login |
+| `/coder` | Kimi K3 in the Pi harness via OpenRouter | high | OpenRouter API key |
+| `/debugger` | GPT-5.6 Luna in the Codex harness | **max** for adversarial debugging | Codex subscription |
+| `/reviewer` | Grok 4.5 in the Pi harness via OpenRouter | high or xhigh | OpenRouter API key |
 
-Part2 may use Kimi K2.7 Code helpers and part3 may use reviewer helpers only when Kimi/Codex is the independent top-level stage parent. If those stages are launched as native children, they work directly without nested dispatch. Part4 remains blind: helpers, if used, receive only the ticket, diff, gate, and invariant docs.
+Coder may use Kimi K2.7 Code helpers and debugger may use auditor helpers only when Kimi/Codex is the independent top-level stage parent. If those stages are launched as native children, they work directly without nested dispatch. Reviewer remains blind: helpers, if used, receive only the ticket, diff, gate, and invariant docs.
 
-If Luna dispatches Opus as a headless Claude child, the planning prompt must contain all decisions needed for the run; the child cannot ask the human. Use a visible Claude Code stage session when the `/part1` grill still needs interaction.
+If Luna dispatches Opus as a headless Claude child, the planning prompt must contain all decisions needed for the run; the child cannot ask the human. Use a visible Claude Code stage session when the `/planner` grill still needs interaction.
 
-The stage handoff is carried by the GitHub Project item's `Status`, the GitHub issue, the git branch/PR, and the handoff document—not by parent-chat history. Run stages serially, work one ticket at a time, and let the next stage re-read those durable artifacts. `/part1` is interactive; a headless child cannot ask the human planning questions, so run its grill in a visible top-level session or provide all decisions in its prompt.
+The stage handoff is carried by the GitHub Project item's `Status`, the GitHub issue, the git branch/PR, and the handoff document—not by parent-chat history. Run stages serially, work one ticket at a time, and let the next stage re-read those durable artifacts. `/planner` is interactive; a headless child cannot ask the human planning questions, so run its grill in a visible top-level session or provide all decisions in its prompt.
 
-`max` is a reasoning-effort setting, not a model name. If a provider or harness changes, record the exact model ID and harness in the handoff while preserving the maker/debugger/grader separation.
+`max` is a reasoning-effort setting, not a model name. If a provider or harness changes, record the exact model ID and harness in the handoff while preserving the maker/debugger/reviewer separation.
 
 ## Runtime layer: super.engineering and Herdr
 
